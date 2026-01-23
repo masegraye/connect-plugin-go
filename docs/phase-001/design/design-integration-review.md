@@ -135,18 +135,17 @@ resp, err := kvStore.Get(ctx, connect.NewRequest(&GetRequest{Key: "hello"}))
 // → POST /kv.v1.KVService/Get
 ```
 
-**Flow through interceptors (design-qjhn, design-bpyd):**
+**Flow through interceptors (design-qjhn, design-koba):**
 ```
 User call
-  → Logging interceptor (outermost)
-    → Tracing interceptor
-      → Metrics interceptor
-        → Retry interceptor (if enabled)
-          → Circuit breaker interceptor (if enabled)
-            → HTTP transport
-              → Server receives
-                → Server interceptors (reverse order)
-                  → Plugin implementation
+  → Custom interceptors from ClientConfig.Interceptors (design-qjhn)
+    → Retry interceptor (if RetryPolicy set, design-qjhn)
+      → Circuit breaker interceptor (if CircuitBreaker set, design-qjhn)
+        → HTTP transport
+          → Server receives
+            → Server interceptors from ServeConfig.Interceptors (design-koba)
+              → Plugin handler
+                → Plugin implementation
 ```
 
 **✅ Integration Point Validated**: Plugin interface (design-gfuh) produces handlers that work with ServeConfig (design-koba) and clients work with ClientConfig (design-qjhn).
@@ -419,7 +418,7 @@ connectplugin.Serve(&connectplugin.ServeConfig{
 - `/readyz` (readiness)
 - `/kv.v1.KVService/*` (plugin services)
 
-### Client with Discovery & Health (design-qjhn, design-munj, design-ejeu)
+### Client with Discovery & Health (design-qjhn)
 
 ```go
 client := connectplugin.NewClient(&connectplugin.ClientConfig{
@@ -440,7 +439,7 @@ client.Connect(ctx)
 
 **What happens:**
 
-1. **Discovery (design-munj):**
+1. **Discovery (design-qjhn):**
    - `Discovery.Discover(ctx, "kv-plugin")` → queries K8s for service endpoints
    - Returns: `[{URL: "http://10.0.0.1:8080", Ready: true}]`
    - Starts watch: `Discovery.Watch(ctx, "kv-plugin")` → channel of endpoint updates
@@ -449,7 +448,7 @@ client.Connect(ctx)
    - `POST http://10.0.0.1:8080/connectplugin.v1.HandshakeService/Handshake`
    - Negotiates version, discovers plugins
 
-3. **Health Monitoring (design-ejeu):**
+3. **Health Monitoring (design-qjhn):**
    - Starts background goroutine
    - Polls: `POST /connectplugin.health.v1.HealthService/Check` every 30s
    - On failure: trips circuit breaker
@@ -458,13 +457,13 @@ client.Connect(ctx)
    - Goes through interceptor chain (retry, circuit breaker)
    - Circuit breaker allows if: health OK + failure count < threshold
 
-**✅ Integration Point Validated**: Discovery (design-munj), health checking (design-ejeu), and circuit breaker (design-qjhn) work together seamlessly.
+**✅ Integration Point Validated**: Discovery, health checking, and circuit breaker (all design-qjhn) work together seamlessly.
 
 ## Cross-Cutting Concerns
 
 ### Interceptor Chain Composition
 
-From designs: qjhn (client), koba (server), bpyd (interceptor patterns)
+From designs: qjhn (client interceptors), koba (server interceptors)
 
 **Client-side chain:**
 ```
@@ -686,9 +685,9 @@ All designs respect context timeouts:
 
 **✅ Consistent naming**
 
-## Integration with fx (design-cldj)
+## Integration with fx
 
-From spike KOR-cldj, the plugin system should integrate with fx:
+From spike KOR-cldj (spike-cldj-fx-integration.md), the plugin system should integrate with fx:
 
 ```go
 // Host application with fx
@@ -736,16 +735,56 @@ All integration points validated:
 
 ### 1. Plugin.ConnectServer(nil) Behavior
 
-**Issue**: Used for validation but not documented
+**Issue**: Cannot validate with nil impl - type assertion would fail
 
-**Fix**: Add to design-gfuh:
+**Fix**: Validation should use reflection or metadata instead:
 ```go
-// ConnectServer returns a handler for this plugin.
-// If impl is nil, should return path without error (for validation).
-// Otherwise, impl must be the correct type.
+// PluginSet.Validate() - alternative approach
+func (ps PluginSet) Validate() error {
+    // Plugins should provide a Metadata() method instead
+    // Or validation happens at runtime when handlers are registered
+    return nil
+}
 ```
 
-### 2. PluginSet.Validate() Location
+**Resolution**: Defer path conflict validation to runtime during Serve().
+
+### 2. Streaming Error Propagation
+
+**Issue**: Error channel pattern (design-uxvj) not covered in scenarios
+
+**Integration**: Enhanced streaming interface with error channel:
+```go
+// From design-uxvj
+type LogService interface {
+    Tail(ctx context.Context, req *TailRequest) (
+        entries <-chan *LogEntry,
+        errs <-chan error,
+    )
+}
+
+// Adapter handles both channels
+func (h *logServiceHandler) Tail(...) error {
+    entries, errs := h.impl.Tail(ctx, req.Msg)
+    for {
+        select {
+        case err := <-errs:
+            if err != nil {
+                return err // Propagates to client
+            }
+        case entry, ok := <-entries:
+            if !ok {
+                return nil
+            }
+            stream.Send(entry)
+        }
+    }
+}
+```
+
+**✅ Validated**: Streaming errors propagate through adapters to client via Connect error returns.
+
+### 3. PluginSet.Validate() Location
 
 **Issue**: Used in design-gfuh but implementation in serve.go?
 
@@ -760,31 +799,56 @@ func Serve(cfg *ServeConfig) error {
 }
 ```
 
-### 3. Health Integration with Discovery
+### 4. Health Integration with Discovery
 
-**Issue**: Ready filtering mentioned but not specified
+**Issue**: Health status affects discovery endpoint filtering
 
-**Fix**: Add to design-munj:
+**Integration**: Discovery endpoints include Ready field (from spike-munj), health monitoring (design-qjhn) updates status, discovery filters ready endpoints:
 ```go
-func filterReady(endpoints []Endpoint) []Endpoint {
-    ready := make([]Endpoint, 0, len(endpoints))
-    for _, ep := range endpoints {
-        if ep.Ready {
-            ready = append(ready, ep)
-        }
+// Client updateEndpoints (design-qjhn)
+func (c *Client) updateEndpoints(endpoints []Endpoint) {
+    ready := filterReady(endpoints) // Only use ready endpoints
+    if len(ready) == 0 {
+        c.logger.Warn("no ready endpoints")
+        return
     }
-    return ready
+    c.endpoints = ready
 }
 ```
 
-### 4. Capability Request Timing
+**✅ Validated**: Health and discovery integrate via Ready flag on endpoints.
+
+### 5. Capability Token Lifecycle
+
+**Issue**: Token expiration and renewal not traced
+
+**Integration**: Capability grants include expiration (design-mdxm), clients must handle renewal:
+```go
+// From design-mdxm
+type CapabilityGrant struct {
+    GrantId      string
+    EndpointUrl  string
+    BearerToken  string
+    ExpiresAt    *timestamppb.Timestamp
+}
+
+// Client monitors expiry and renews
+if time.Until(grant.ExpiresAt.AsTime()) < 5*time.Minute {
+    newGrant, err := broker.RefreshCapability(ctx, grant.GrantId)
+    // Update client with new token
+}
+```
+
+**✅ Validated**: Capability grants are time-limited and renewable.
+
+### 6. Capability Request Timing
 
 **Issue**: When does plugin request capabilities?
 
-**Fix**: Add to design-mdxm:
-- **Option A**: During Connect() before plugin is dispensed
-- **Option B**: Lazy - when plugin first requests capability
-- **Recommended**: Option A (eager) for required capabilities
+**Resolution**:
+- **Required capabilities**: Host validates during handshake (design-mbgw) but doesn't issue grants
+- **Capability grants**: Issued on-demand when plugin calls broker
+- **Recommended**: Plugins request capabilities during their init/OnStart phase
 
 ## Conclusion
 
