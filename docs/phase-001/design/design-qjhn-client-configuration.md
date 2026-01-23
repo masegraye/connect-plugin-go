@@ -8,48 +8,88 @@
 
 The client configuration defines how a host application connects to and interacts with plugins. Unlike go-plugin which requires subprocess management, connect-plugin clients are simpler but need more network-aware configuration for discovery, resilience, and health monitoring.
 
+## Design Philosophy
+
+**Problem:** Initial design had 30+ configuration fields, overwhelming users and making simple cases unnecessarily complex.
+
+**Solution:** Split configuration into two levels:
+
+1. **ClientConfig** (2-3 required fields) - Minimal configuration for simple cases
+   - Just `Endpoint` and `Plugins`
+   - No optional fields exposed
+   - Clear required vs optional separation
+
+2. **ClientOptions** (all optional) - Advanced features opt-in
+   - Retries: disabled by default (MaxAttempts=1)
+   - Health monitoring: disabled by default (HealthCheckInterval=0)
+   - Discovery, circuit breakers, etc.: all nil by default
+
+**Key Decisions:**
+
+- **Removed SkipHandshake**: Handshake is always performed for safety
+- **Retries opt-in**: MaxAttempts=1 by default (no retries, no hidden latency)
+- **Health monitoring opt-in**: HealthCheckInterval=0 by default (no background goroutines)
+- **Retry attempts reduced**: MaxAttempts=2 recommended (not 3) to reduce overhead
+- **Removed dual config**: Simplified Plugins vs VersionedPlugins (VersionedPlugins moved to Options)
+- **Clear timeout docs**: RequestTimeout applies to all retry attempts combined
+
 ## Design Goals
 
-1. **Simple defaults**: Minimal config for common cases
-2. **Network-aware**: Support discovery, retry, circuit breakers
-3. **Flexible**: Allow customization without overwhelming users
-4. **Lazy connection**: Don't connect until needed
-5. **Explicit control**: Connection lifecycle is clear
+1. **Simple defaults**: Minimal config for common cases (2-3 fields)
+2. **Progressive enhancement**: Advanced features available but optional
+3. **Opt-in complexity**: No hidden costs (retries, health checks, etc.)
+4. **Network-aware**: Support discovery, retry, circuit breakers when needed
+5. **Lazy connection**: Don't connect until needed
+6. **Explicit control**: Connection lifecycle is clear
 
-## ClientConfig Structure
+## Configuration Structure
+
+The configuration is split into two parts:
+
+1. **ClientConfig** - Minimal required fields (3-5 fields for simple cases)
+2. **ClientOptions** - Optional advanced features
+
+### ClientConfig (Required)
 
 ```go
-// ClientConfig configures a plugin client.
+// ClientConfig is the minimal configuration required to create a plugin client.
+// For most use cases, only Endpoint and Plugins are needed.
 type ClientConfig struct {
-    // ===== Connection Target =====
-
     // Endpoint is the plugin service URL.
-    // Supports schemes: http://, https://, dns:///, k8s:///
-    // Required if Discovery is nil.
+    // Required. Supports: http://, https://, dns:///, k8s:///
+    // Examples:
+    //   - "http://localhost:8080"
+    //   - "https://plugin.example.com"
+    //   - "dns:///plugin-service" (with Discovery)
     Endpoint string
 
-    // Discovery provides dynamic endpoint resolution.
-    // If set, Endpoint is used as the service name to discover.
+    // Plugins defines available plugin types.
+    // Required. Maps plugin name to implementation.
+    Plugins PluginSet
+
+    // Discovery provides dynamic endpoint resolution (optional).
+    // If set, Endpoint is treated as a service name to discover.
+    // Most users can leave this nil.
     Discovery DiscoveryService
+}
+```
 
+### ClientOptions (Optional)
+
+```go
+// ClientOptions provides optional advanced configuration.
+// All fields are optional and have sensible defaults.
+type ClientOptions struct {
     // ===== Protocol Configuration =====
-
-    // CoreProtocolVersion is the handshake protocol version.
-    // Currently must be 1 (default).
-    CoreProtocolVersion int
 
     // AppProtocolVersions are supported plugin API versions.
     // Negotiated during handshake. First = most preferred.
     // Default: []int{1}
     AppProtocolVersions []int
 
-    // Plugins defines available plugin types for each version.
-    // Key = app protocol version.
-    Plugins PluginSet
-
     // VersionedPlugins maps protocol versions to plugin sets.
-    // Used when supporting multiple plugin API versions.
-    // Overrides Plugins field if set.
+    // Only needed when supporting multiple plugin API versions.
+    // If set, overrides ClientConfig.Plugins.
     VersionedPlugins map[int]PluginSet
 
     // MagicCookieKey and Value for validation (not security).
@@ -57,64 +97,51 @@ type ClientConfig struct {
     MagicCookieKey   string
     MagicCookieValue string
 
-    // ===== Connection Behavior =====
-
-    // LazyConnect defers connection until first plugin use.
-    // If false, Connect() establishes connection immediately.
-    // Default: true
-    LazyConnect bool
-
-    // SkipHandshake bypasses handshake negotiation.
-    // Only use in trusted single-version environments.
-    // Default: false
-    SkipHandshake bool
-
-    // HandshakeTimeout is the max time for handshake RPC.
-    // Default: 10 seconds
-    HandshakeTimeout time.Duration
-
-    // HandshakeCacheTTL is how long to cache handshake results.
-    // Set to 0 to disable caching.
-    // Default: 5 minutes
-    HandshakeCacheTTL time.Duration
-
     // ===== Network & Transport =====
 
     // HTTPClient for making requests.
-    // If nil, creates default client with reasonable settings.
+    // Default: creates client with 30s timeout
     HTTPClient connect.HTTPClient
 
     // TLSConfig for HTTPS connections.
-    // If nil and endpoint is https://, uses default TLS.
+    // Default: system TLS config for https:// endpoints
     TLSConfig *tls.Config
 
-    // RequestTimeout is default timeout for plugin RPCs.
+    // RequestTimeout is the default timeout for plugin RPCs.
+    // This is the total time including retries.
     // Can be overridden per-request via context.
     // Default: 30 seconds
+    //
+    // NOTE: If RetryPolicy is configured, this timeout applies to
+    // all retry attempts combined. For example, with RequestTimeout=10s
+    // and MaxAttempts=2, each attempt gets ~5s before timeout.
     RequestTimeout time.Duration
 
-    // ===== Resilience =====
+    // ===== Resilience (Opt-in) =====
 
     // RetryPolicy configures automatic retry behavior.
-    // If nil, uses DefaultRetryPolicy.
+    // Default: single attempt (MaxAttempts=1, no retries)
+    // Set MaxAttempts > 1 to enable retries.
     RetryPolicy *RetryPolicy
 
     // CircuitBreaker configures circuit breaker behavior.
-    // If nil, circuit breaking is disabled.
+    // Default: nil (circuit breaking disabled)
     CircuitBreaker *CircuitBreakerConfig
 
-    // ===== Health Monitoring =====
+    // ===== Health Monitoring (Opt-in) =====
 
     // HealthCheckInterval for background health checks.
-    // Set to 0 to disable health monitoring.
-    // Default: 30 seconds
+    // Default: 0 (health monitoring disabled)
+    // Set to non-zero (e.g., 30s) to enable health monitoring.
     HealthCheckInterval time.Duration
 
     // HealthCheckTimeout for each health check RPC.
+    // Only used when HealthCheckInterval > 0.
     // Default: 5 seconds
     HealthCheckTimeout time.Duration
 
     // OnHealthChange callback when plugin health changes.
+    // Only called when HealthCheckInterval > 0.
     OnHealthChange func(status HealthStatus)
 
     // ===== Capabilities =====
@@ -130,7 +157,7 @@ type ClientConfig struct {
     Interceptors []connect.Interceptor
 
     // Logger for client operations.
-    // If nil, uses default logger.
+    // Default: noop logger
     Logger Logger
 
     // ===== Metadata =====
@@ -144,107 +171,227 @@ type ClientConfig struct {
 }
 ```
 
-## Default Configuration
+## Client Creation
 
 ```go
-// DefaultClientConfig returns sensible defaults.
-func DefaultClientConfig() *ClientConfig {
-    return &ClientConfig{
-        CoreProtocolVersion:  1,
-        AppProtocolVersions:  []int{1},
-        MagicCookieKey:       DefaultMagicCookieKey,
-        MagicCookieValue:     DefaultMagicCookieValue,
-        LazyConnect:          true,
-        SkipHandshake:        false,
-        HandshakeTimeout:     10 * time.Second,
-        HandshakeCacheTTL:    5 * time.Minute,
-        RequestTimeout:       30 * time.Second,
-        RetryPolicy:          DefaultRetryPolicy(),
-        HealthCheckInterval:  30 * time.Second,
-        HealthCheckTimeout:   5 * time.Second,
+// NewClient creates a plugin client with minimal required configuration.
+// Advanced features are opt-in via ClientOptions.
+func NewClient(cfg ClientConfig, opts *ClientOptions) (*Client, error) {
+    // Validate required fields
+    if err := cfg.Validate(); err != nil {
+        return nil, err
     }
+
+    // Apply defaults to options
+    if opts == nil {
+        opts = &ClientOptions{}
+    }
+    opts = opts.withDefaults()
+
+    client := &Client{
+        cfg:  cfg,
+        opts: opts,
+    }
+
+    return client, nil
 }
 
-// NewClient creates a client with defaults.
-func NewClient(cfg *ClientConfig) (*Client, error) {
-    // Merge with defaults
-    if cfg.CoreProtocolVersion == 0 {
-        cfg.CoreProtocolVersion = 1
-    }
-    if len(cfg.AppProtocolVersions) == 0 {
-        cfg.AppProtocolVersions = []int{1}
-    }
-    if cfg.MagicCookieKey == "" {
-        cfg.MagicCookieKey = DefaultMagicCookieKey
-        cfg.MagicCookieValue = DefaultMagicCookieValue
-    }
-    // ... apply other defaults
+// withDefaults applies default values to ClientOptions.
+func (o *ClientOptions) withDefaults() *ClientOptions {
+    result := &ClientOptions{}
+    *result = *o // Copy
 
-    return &Client{cfg: cfg}, nil
+    // Protocol defaults
+    if len(result.AppProtocolVersions) == 0 {
+        result.AppProtocolVersions = []int{1}
+    }
+    if result.MagicCookieKey == "" {
+        result.MagicCookieKey = DefaultMagicCookieKey
+        result.MagicCookieValue = DefaultMagicCookieValue
+    }
+
+    // Network defaults
+    if result.RequestTimeout == 0 {
+        result.RequestTimeout = 30 * time.Second
+    }
+
+    // Retry defaults (single attempt by default)
+    if result.RetryPolicy == nil {
+        result.RetryPolicy = &RetryPolicy{
+            MaxAttempts: 1, // No retries by default
+        }
+    }
+
+    // Health monitoring disabled by default
+    // (HealthCheckInterval defaults to 0)
+
+    if result.HealthCheckTimeout == 0 {
+        result.HealthCheckTimeout = 5 * time.Second
+    }
+
+    // Logger defaults to noop
+    if result.Logger == nil {
+        result.Logger = NoopLogger{}
+    }
+
+    return result
 }
 ```
 
-## Minimal Configuration Examples
+## Configuration Examples
 
-### Simple Case (Direct Endpoint)
+### Simple Case (3 fields - most common)
 
 ```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint: "http://plugin:8080",
-    Plugins: connectplugin.PluginSet{
-        "kv": &kvplugin.KVServicePlugin{},
+// Minimal configuration: just endpoint and plugins
+// No retries, no health checks, no advanced features
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins: connectplugin.PluginSet{
+            "kv": &kvplugin.KVServicePlugin{},
+        },
     },
-})
+    nil, // Use default options
+)
+if err != nil {
+    return err
+}
 
-client.Connect(ctx)
+// Connection is lazy - happens on first use
 kvStore := connectplugin.MustDispenseTyped[kv.KVStore](client, "kv")
 ```
+
+**What you get:**
+- 30s request timeout (total time including any retry attempts)
+- Single attempt (no retries)
+- No health monitoring
+- Lazy connection (connects on first plugin use)
+
+### With Basic Retry (Production-Ready)
+
+```go
+// Add simple retry for transient failures
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins: connectplugin.PluginSet{
+            "kv": &kvplugin.KVServicePlugin{},
+        },
+    },
+    &connectplugin.ClientOptions{
+        RetryPolicy: &connectplugin.RetryPolicy{
+            MaxAttempts:  2,                       // 1 initial + 1 retry
+            InitialDelay: 100 * time.Millisecond,  // Wait before retry
+        },
+    },
+)
+```
+
+**What you get:**
+- 30s request timeout (shared across both attempts)
+- 2 attempts total (1 initial + 1 retry)
+- 100ms delay before retry
+- Exponential backoff (2x multiplier by default)
+- Retries on: Unavailable, DeadlineExceeded, ResourceExhausted
+
+**Timeout behavior:**
+- With RequestTimeout=30s and MaxAttempts=2:
+  - First attempt: up to ~15s
+  - Retry delay: 100ms
+  - Second attempt: remaining time (~14.9s)
 
 ### With Discovery
 
 ```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint: "kv-plugin", // Service name
-    Discovery: connectplugin.NewKubernetesDiscovery(
-        clientset,
-        "default",
-    ),
-    Plugins: connectplugin.PluginSet{
-        "kv": &kvplugin.KVServicePlugin{},
+// Dynamic endpoint resolution in Kubernetes
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint:  "kv-plugin", // Service name, not URL
+        Discovery: connectplugin.NewKubernetesDiscovery(clientset, "default"),
+        Plugins: connectplugin.PluginSet{
+            "kv": &kvplugin.KVServicePlugin{},
+        },
     },
-})
+    nil,
+)
 ```
 
-### With Resilience
+### With Health Monitoring (Opt-In)
 
 ```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint: "http://plugin:8080",
-    Plugins: connectplugin.PluginSet{
-        "kv": &kvplugin.KVServicePlugin{},
+// Enable background health checks (disabled by default)
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins: connectplugin.PluginSet{
+            "kv": &kvplugin.KVServicePlugin{},
+        },
     },
-    RetryPolicy: &connectplugin.RetryPolicy{
-        MaxAttempts:  3,
-        InitialDelay: 100 * time.Millisecond,
-        MaxDelay:     5 * time.Second,
-        Multiplier:   2.0,
+    &connectplugin.ClientOptions{
+        HealthCheckInterval: 30 * time.Second, // Enable monitoring
+        OnHealthChange: func(status connectplugin.HealthStatus) {
+            log.Printf("Plugin health: %v", status)
+        },
     },
-    CircuitBreaker: &connectplugin.CircuitBreakerConfig{
-        FailureThreshold: 5,
-        SuccessThreshold: 2,
-        Timeout:          30 * time.Second,
+)
+```
+
+**Health monitoring cost:**
+- Background goroutine running
+- Health check RPC every 30s (5s timeout each)
+- Only enable if you need proactive monitoring
+
+### Full Production Setup (All Features)
+
+```go
+// Production configuration with all resilience features
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins: connectplugin.PluginSet{
+            "kv": &kvplugin.KVServicePlugin{},
+        },
     },
-})
+    &connectplugin.ClientOptions{
+        // Retry configuration
+        RetryPolicy: &connectplugin.RetryPolicy{
+            MaxAttempts:  2,
+            InitialDelay: 100 * time.Millisecond,
+            MaxDelay:     2 * time.Second,
+        },
+
+        // Circuit breaker (fail fast when plugin is down)
+        CircuitBreaker: &connectplugin.CircuitBreakerConfig{
+            FailureThreshold: 5,
+            SuccessThreshold: 2,
+            Timeout:          30 * time.Second,
+        },
+
+        // Health monitoring (optional)
+        HealthCheckInterval: 30 * time.Second,
+
+        // Observability
+        Interceptors: []connect.Interceptor{
+            loggingInterceptor,
+            tracingInterceptor,
+        },
+        Logger: logger,
+    },
+)
 ```
 
 ## Retry Policy Configuration
 
 ```go
 // RetryPolicy configures automatic retry behavior.
+// Retries are opt-in - set MaxAttempts > 1 to enable.
 type RetryPolicy struct {
     // MaxAttempts is the maximum number of attempts (including initial).
-    // Set to 1 to disable retries.
-    // Default: 3
+    // 1 = no retries (just initial attempt)
+    // 2 = one retry (recommended for production)
+    // 3+ = multiple retries (use sparingly)
+    // Default: 1 (no retries)
     MaxAttempts int
 
     // InitialDelay before first retry.
@@ -252,7 +399,7 @@ type RetryPolicy struct {
     InitialDelay time.Duration
 
     // MaxDelay caps retry backoff.
-    // Default: 5 seconds
+    // Default: 2 seconds
     MaxDelay time.Duration
 
     // Multiplier for exponential backoff.
@@ -271,22 +418,29 @@ type RetryPolicy struct {
     OnRetry func(attempt int, err error)
 }
 
-// DefaultRetryPolicy returns sensible retry defaults.
-func DefaultRetryPolicy() *RetryPolicy {
-    return &RetryPolicy{
-        MaxAttempts:  3,
-        InitialDelay: 100 * time.Millisecond,
-        MaxDelay:     5 * time.Second,
-        Multiplier:   2.0,
-        Jitter:       0.1,
-        RetryableErrors: []connect.Code{
-            connect.CodeUnavailable,
-            connect.CodeDeadlineExceeded,
-            connect.CodeResourceExhausted,
-        },
+// Validate checks RetryPolicy for errors.
+func (p *RetryPolicy) Validate() error {
+    if p.MaxAttempts < 1 {
+        return errors.New("MaxAttempts must be >= 1")
     }
+    if p.MaxAttempts > 5 {
+        return errors.New("MaxAttempts > 5 is not recommended (adds significant latency)")
+    }
+    return nil
 }
 ```
+
+**Retry Defaults Rationale:**
+
+- **MaxAttempts: 1** (no retries) by default to avoid hidden latency
+  - Users must explicitly opt into retries
+  - Recommended: 2 for production (adds ~100ms overhead on transient failures)
+
+- **InitialDelay: 100ms** - Quick retry without overwhelming the plugin
+
+- **MaxDelay: 2s** - Reduced from 5s to keep total timeout reasonable
+  - With 2 attempts: 100ms + 200ms = 300ms total retry overhead
+  - With 3 attempts: 100ms + 200ms + 400ms = 700ms total retry overhead
 
 ## Circuit Breaker Configuration
 
@@ -329,7 +483,7 @@ const (
 
 ```
 ┌─────────────┐
-│  NewClient  │  Creates client, doesn't connect
+│  NewClient  │  Creates client, validates config only
 └──────┬──────┘
        │
        ▼
@@ -346,15 +500,16 @@ const (
 │     │ Discovery.Discover(ctx, serviceName)        │      │
 │     └─────────────────────────────────────────────┘      │
 │                                                           │
-│  2. Perform handshake (unless SkipHandshake)              │
+│  2. Perform handshake                                     │
 │     ┌─────────────────────────────────────────────┐      │
 │     │ HandshakeService.Handshake(...)             │      │
-│     │ - Negotiate versions                        │      │
+│     │ - Validate magic cookie                     │      │
+│     │ - Negotiate protocol versions               │      │
 │     │ - Discover available plugins                │      │
-│     │ - Exchange capabilities                     │      │
+│     │ - Exchange capabilities (if configured)     │      │
 │     └─────────────────────────────────────────────┘      │
 │                                                           │
-│  3. Start health monitoring (if enabled)                  │
+│  3. Start health monitoring (if HealthCheckInterval > 0)  │
 │     ┌─────────────────────────────────────────────┐      │
 │     │ go healthMonitor.Start()                    │      │
 │     └─────────────────────────────────────────────┘      │
@@ -372,20 +527,7 @@ const (
 └─────────────┘
 ```
 
-### Eager Connection
-
-```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint:    "http://plugin:8080",
-    LazyConnect: false,  // Connect immediately
-    Plugins:     pluginSet,
-})
-
-// Connect() called automatically during NewClient()
-// Returns error if connection fails
-
-kvStore := connectplugin.MustDispenseTyped[kv.KVStore](client, "kv")
-```
+**Note:** Handshake is always performed (SkipHandshake option removed for simplicity and safety).
 
 ## Interceptor Composition
 
@@ -421,21 +563,42 @@ loggingInterceptor
 
 ## Health Monitoring Integration
 
-When health monitoring is enabled, the client continuously checks plugin health:
+Health monitoring is **opt-in** (disabled by default). Enable it by setting `HealthCheckInterval > 0`.
 
 ```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint:            "http://plugin:8080",
-    HealthCheckInterval: 30 * time.Second,
-    OnHealthChange: func(status HealthStatus) {
-        log.Printf("Plugin health changed: %v", status)
-        if status == HealthStatusUnhealthy {
-            // Optionally trigger circuit breaker
-            client.circuitBreaker.Trip()
-        }
+// Health monitoring disabled by default
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins:  pluginSet,
     },
-})
+    nil, // HealthCheckInterval defaults to 0
+)
+
+// Explicitly enable health monitoring
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins:  pluginSet,
+    },
+    &connectplugin.ClientOptions{
+        HealthCheckInterval: 30 * time.Second, // Enable monitoring
+        OnHealthChange: func(status connectplugin.HealthStatus) {
+            log.Printf("Plugin health: %v", status)
+            if status == connectplugin.HealthStatusUnhealthy {
+                // Optionally trigger circuit breaker
+                client.CircuitBreaker().Trip()
+            }
+        },
+    },
+)
 ```
+
+**Why opt-in?**
+- Background goroutine cost
+- Additional RPC every 30s (adds network traffic)
+- Most applications prefer request-time failure detection via retries
+- Useful for long-running connections with infrequent requests
 
 **Health check flow:**
 ```go
@@ -446,6 +609,11 @@ type healthMonitor struct {
 }
 
 func (m *healthMonitor) Start(ctx context.Context) {
+    // Only start if interval > 0
+    if m.interval == 0 {
+        return
+    }
+
     ticker := time.NewTicker(m.interval)
     defer ticker.Stop()
 
@@ -474,8 +642,8 @@ func (m *healthMonitor) check(ctx context.Context) {
 
     if newStatus != m.lastStatus {
         m.lastStatus = newStatus
-        if m.client.cfg.OnHealthChange != nil {
-            m.client.cfg.OnHealthChange(newStatus)
+        if m.client.opts.OnHealthChange != nil {
+            m.client.opts.OnHealthChange(newStatus)
         }
     }
 }
@@ -614,64 +782,230 @@ func (c *Client) Close() error {
 ```go
 // Validate checks ClientConfig for errors.
 func (cfg *ClientConfig) Validate() error {
-    if cfg.Endpoint == "" && cfg.Discovery == nil {
-        return errors.New("either Endpoint or Discovery must be set")
+    if cfg.Endpoint == "" {
+        return errors.New("Endpoint is required")
     }
 
-    if cfg.Plugins == nil && cfg.VersionedPlugins == nil {
-        return errors.New("either Plugins or VersionedPlugins must be set")
+    if cfg.Plugins == nil {
+        return errors.New("Plugins is required")
     }
 
-    if cfg.CoreProtocolVersion != 0 && cfg.CoreProtocolVersion != 1 {
-        return fmt.Errorf("unsupported core protocol version: %d", cfg.CoreProtocolVersion)
+    if len(cfg.Plugins) == 0 {
+        return errors.New("Plugins must contain at least one plugin")
     }
 
-    if cfg.RetryPolicy != nil {
-        if err := cfg.RetryPolicy.Validate(); err != nil {
+    return nil
+}
+
+// Validate checks ClientOptions for errors.
+func (opts *ClientOptions) Validate() error {
+    if opts.RetryPolicy != nil {
+        if err := opts.RetryPolicy.Validate(); err != nil {
             return fmt.Errorf("invalid retry policy: %w", err)
         }
     }
 
-    if cfg.CircuitBreaker != nil {
-        if err := cfg.CircuitBreaker.Validate(); err != nil {
+    if opts.CircuitBreaker != nil {
+        if err := opts.CircuitBreaker.Validate(); err != nil {
             return fmt.Errorf("invalid circuit breaker: %w", err)
         }
+    }
+
+    if opts.HealthCheckInterval < 0 {
+        return errors.New("HealthCheckInterval cannot be negative")
+    }
+
+    if opts.HealthCheckTimeout <= 0 && opts.HealthCheckInterval > 0 {
+        return errors.New("HealthCheckTimeout must be > 0 when HealthCheckInterval is enabled")
+    }
+
+    if opts.RequestTimeout <= 0 {
+        return errors.New("RequestTimeout must be > 0")
+    }
+
+    // Validate VersionedPlugins vs Plugins consistency
+    if opts.VersionedPlugins != nil && len(opts.VersionedPlugins) == 0 {
+        return errors.New("VersionedPlugins must contain at least one version if set")
     }
 
     return nil
 }
 ```
 
+## Timeout Interaction Clarification
+
+Understanding how timeouts interact with retries is critical:
+
+```go
+// Example: RequestTimeout with Retries
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins:  pluginSet,
+    },
+    &connectplugin.ClientOptions{
+        RequestTimeout: 10 * time.Second, // Total time budget
+        RetryPolicy: &connectplugin.RetryPolicy{
+            MaxAttempts:  2,                      // 1 initial + 1 retry
+            InitialDelay: 100 * time.Millisecond,
+        },
+    },
+)
+```
+
+**How it works:**
+
+1. **RequestTimeout** is the total time budget for the entire request, including all retry attempts
+2. Each retry attempt gets a proportional share of the remaining time
+3. The retry interceptor respects context deadlines
+
+**Example timeline (10s timeout, 2 attempts):**
+```
+t=0s:     First attempt starts
+t=5s:     First attempt fails (Unavailable)
+t=5.1s:   Wait 100ms (InitialDelay)
+t=5.1s:   Second attempt starts with ~4.9s remaining
+t=8s:     Second attempt succeeds
+Total:    8s
+```
+
+**Example timeline (timeout exceeded):**
+```
+t=0s:     First attempt starts
+t=9s:     First attempt fails (Unavailable)
+t=9.1s:   Wait 100ms (InitialDelay)
+t=9.2s:   Second attempt starts with ~0.8s remaining
+t=10s:    Second attempt times out (DeadlineExceeded)
+Total:    10s (timeout)
+```
+
+**Per-request timeout override:**
+```go
+// Override timeout for a specific request
+ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+defer cancel()
+
+// This request has 5s total (overrides default 10s)
+err := kvStore.Set(ctx, "key", "value")
+```
+
+**Recommendation:**
+- Keep `RequestTimeout` reasonable (30s default)
+- Use `MaxAttempts=2` for production (adds ~100-200ms overhead)
+- For critical paths, use per-request context timeouts
+
 ## Comparison with go-plugin
 
-| Aspect | go-plugin | connect-plugin |
-|--------|-----------|----------------|
-| **Endpoint** | Subprocess command | URL or discovery |
-| **Connection** | Eager (subprocess start) | Lazy (default) or eager |
-| **Discovery** | N/A | Pluggable (DNS, K8s) |
-| **Retry** | None | Built-in policy |
-| **Circuit Breaker** | None | Optional |
-| **Health Checks** | Basic ping | Continuous monitoring |
-| **TLS** | AutoMTLS | TLS config |
-| **Timeouts** | Per-RPC context | Default + per-RPC |
+| Aspect | go-plugin | connect-plugin (simple) | connect-plugin (advanced) |
+|--------|-----------|------------------------|---------------------------|
+| **Config Fields** | ~10 required | 2-3 required | 2-3 required + options |
+| **Endpoint** | Subprocess command | URL | URL + discovery |
+| **Connection** | Eager (subprocess) | Lazy (default) | Lazy (default) |
+| **Discovery** | N/A | N/A | Pluggable (DNS, K8s) |
+| **Retry** | None | Opt-in (MaxAttempts > 1) | Opt-in with backoff |
+| **Circuit Breaker** | None | None | Optional |
+| **Health Checks** | Basic ping | None (use retries) | Opt-in continuous monitoring |
+| **TLS** | AutoMTLS | TLS config | TLS config |
+| **Timeouts** | Per-RPC context | 30s default | Configurable |
 
 ## Implementation Checklist
 
-- [x] ClientConfig structure
-- [x] Default configuration
-- [x] Retry policy configuration
-- [x] Circuit breaker configuration
-- [x] Connection establishment flow
-- [x] Lazy vs eager connection
-- [x] Health monitoring integration
+- [x] ClientConfig structure (minimal 2-3 fields)
+- [x] ClientOptions structure (all optional)
+- [x] Default configuration with opt-in features
+- [x] Retry policy configuration (MaxAttempts=1 default, recommend 2)
+- [x] Circuit breaker configuration (disabled by default)
+- [x] Health monitoring (opt-in, disabled by default)
+- [x] Connection establishment flow (handshake always performed)
+- [x] Lazy connection (default behavior)
 - [x] Discovery integration
 - [x] Interceptor composition
 - [x] Configuration validation
+- [x] Timeout interaction documentation
+- [x] Simple vs advanced examples
+
+## Review Feedback Addressed
+
+✅ **Too many config options**: Split into ClientConfig (2-3 fields) + ClientOptions (all optional)
+✅ **Retry defaults too aggressive**: MaxAttempts=1 by default, recommend 2 (not 3)
+✅ **Health monitoring should be opt-in**: HealthCheckInterval=0 by default
+✅ **Dual config confusing**: VersionedPlugins moved to Options, Plugins in Config
+✅ **Timeout interaction unclear**: Added detailed documentation with examples
+✅ **SkipHandshake removed**: Handshake always performed for safety
+
+## Summary: Simple Case vs Advanced Case
+
+### Simple Case (90% of users)
+
+```go
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins: connectplugin.PluginSet{
+            "kv": &kvplugin.KVServicePlugin{},
+        },
+    },
+    nil,
+)
+```
+
+**What you get:**
+- 2-3 lines of code
+- 30s request timeout
+- Single attempt (no retries, no hidden latency)
+- No health monitoring (no background goroutines)
+- Lazy connection (connects on first use)
+
+### Advanced Case (production with retries)
+
+```go
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins:  pluginSet,
+    },
+    &connectplugin.ClientOptions{
+        RetryPolicy: &connectplugin.RetryPolicy{
+            MaxAttempts:  2, // 1 initial + 1 retry
+            InitialDelay: 100 * time.Millisecond,
+        },
+    },
+)
+```
+
+**What you get:**
+- Simple case + retries
+- ~100-200ms overhead on transient failures
+- Still no health monitoring (use retries instead)
+
+### Full Production Case (all features)
+
+```go
+client, err := connectplugin.NewClient(
+    connectplugin.ClientConfig{
+        Endpoint: "http://plugin:8080",
+        Plugins:  pluginSet,
+    },
+    &connectplugin.ClientOptions{
+        RetryPolicy:         retryPolicy,
+        CircuitBreaker:      circuitBreaker,
+        HealthCheckInterval: 30 * time.Second, // Opt-in
+        Interceptors:        interceptors,
+    },
+)
+```
+
+**What you get:**
+- Everything explicitly configured
+- Background health monitoring (you opted in)
+- Circuit breaker (fail fast when plugin is down)
+- Custom interceptors (logging, tracing, etc.)
 
 ## Next Steps
 
-1. Implement ClientConfig in `client.go`
-2. Implement connection establishment logic
-3. Implement retry interceptor
-4. Implement circuit breaker interceptor
-5. Design server configuration (KOR-koba)
+1. Implement ClientConfig and ClientOptions in `client.go`
+2. Implement connection establishment logic with lazy connection
+3. Implement retry interceptor with opt-in behavior
+4. Implement circuit breaker interceptor (disabled by default)
+5. Implement health monitoring with opt-in behavior
+6. Design server configuration (KOR-koba)

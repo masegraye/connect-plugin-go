@@ -1,24 +1,51 @@
 # Design: Streaming Adapter Patterns (chan <-> stream)
 
 **Issue:** KOR-uxvj
-**Status:** Complete
+**Status:** In Review (Revision 2 - Simplified)
 **Dependencies:** KOR-yosi, KOR-neyu
+
+## Revision History
+
+**Revision 1 (Original):** Full adapter suite for all streaming patterns
+- Server, client, and bidirectional streaming adapters
+- Configurable buffer sizes
+- Multiple API styles for bidirectional (callback and dual-channel)
+
+**Revision 2 (This version):** Simplified to minimal viable pattern
+- **Server streaming only** - client/bidi use Connect API directly
+- **Fixed buffer size** (32) - no configuration
+- **Mandatory error channels** - explicit error handling
+- **No hidden goroutines** - adapter reads in main RPC goroutine
+- Addresses review feedback: complexity, lifecycle, deadlock risks
 
 ## Overview
 
-Streaming adapters bridge Connect's method-based streaming with Go's idiomatic channel-based concurrency. This enables plugin authors to write natural Go code using channels while the generated code handles stream lifecycle, backpressure, and error propagation.
+Streaming adapters provide a **minimal, explicit** pattern for server-side streaming using channels. This design intentionally limits scope to the simplest, most valuable pattern while keeping lifecycle and error handling completely explicit.
 
-## Design Goals
+## Design Principles
 
-1. **Idiomatic Go**: Plugin implementations use channels, not streaming APIs
-2. **Safe lifecycle**: Automatic cleanup on context cancellation
-3. **Backpressure**: Honor stream flow control and channel buffer limits
-4. **Error propagation**: Clear error paths from implementation to caller
-5. **Zero goroutine leaks**: All goroutines cleaned up on completion
+1. **Server streaming only**: Client and bidirectional streaming use Connect APIs directly
+2. **Explicit lifecycle**: Goroutines and cleanup are visible, not hidden
+3. **Mandatory error handling**: All streaming requires error channels
+4. **Simple defaults**: Fixed buffer sizes, no configuration
+5. **Ship minimal value**: Defer complexity until proven necessary
 
-## Streaming Patterns
+## What This Design Does NOT Include
 
-### Server Streaming (server sends multiple, client receives)
+These patterns are explicitly out of scope. Use Connect's streaming APIs directly for:
+
+- **Client streaming**: Implementations receive `*connect.ClientStream[T]` directly
+- **Bidirectional streaming**: Implementations receive `*connect.BidiStream[T, R]` directly
+- **Complex lifecycle**: If you need custom buffering, flow control, or coordination
+- **Fire-and-forget**: If you don't want to wait for completion
+
+**Why?** These patterns introduce hidden goroutines, complex error coordination, and potential deadlocks. The marginal convenience is not worth the complexity cost.
+
+## Server Streaming Pattern
+
+This is the **only** adapter pattern we provide. It covers the common case of server-side streaming while keeping complexity minimal.
+
+### The Pattern
 
 **Proto:**
 ```protobuf
@@ -27,20 +54,28 @@ service LogService {
 }
 ```
 
-**Generated Interface (idiomatic Go):**
+**Generated Interface:**
 ```go
 // LogService is the interface plugin authors implement
 type LogService interface {
-    // Tail returns a channel of log entries.
-    // The implementation sends entries and closes the channel when done.
-    // Return nil to indicate error (use context for cancellation).
-    Tail(ctx context.Context, req *TailRequest) (<-chan *LogEntry, error)
+    // Tail returns channels for log entries and errors.
+    //
+    // The implementation MUST:
+    // 1. Send entries on the entries channel
+    // 2. Send at most ONE error on the error channel (if an error occurs)
+    // 3. Close the entries channel when done (success or error)
+    // 4. Respect ctx cancellation and clean up goroutines
+    //
+    // The adapter will:
+    // 1. Wait for entries, errors, or context cancellation
+    // 2. Return the first error received (from err channel or ctx)
+    // 3. Return nil when entries channel closes with no error
+    Tail(ctx context.Context, req *TailRequest) (entries <-chan *LogEntry, err <-chan error)
 }
 ```
 
 **Generated Adapter:**
 ```go
-// serverStreamAdapter adapts a Go channel to a Connect server stream
 type logServiceHandler struct {
     impl LogService
 }
@@ -50,32 +85,38 @@ func (h *logServiceHandler) Tail(
     req *connect.Request[TailRequest],
     stream *connect.ServerStream[LogEntry],
 ) error {
-    // Call implementation to get channel
-    ch, err := h.impl.Tail(ctx, req.Msg)
-    if err != nil {
-        return err
-    }
+    // Call implementation
+    entries, errs := h.impl.Tail(ctx, req.Msg)
 
-    // Pump channel to stream
-    return pumpChannelToStream(ctx, ch, stream)
+    // Pump channels to stream
+    return pumpToStream(ctx, entries, errs, stream)
 }
 
-// pumpChannelToStream sends channel values to stream until channel closes
-func pumpChannelToStream[T any](
+// pumpToStream sends channel values to stream until channel closes or error occurs
+func pumpToStream[T any](
     ctx context.Context,
     ch <-chan T,
+    errs <-chan error,
     stream *connect.ServerStream[T],
 ) error {
     for {
         select {
         case <-ctx.Done():
+            // Context cancelled - clean shutdown
             return ctx.Err()
+
+        case err := <-errs:
+            // Error from implementation - stop immediately
+            // Implementation MUST close ch after sending error
+            return err
+
         case msg, ok := <-ch:
             if !ok {
-                // Channel closed, stream complete
+                // Channel closed - normal completion
                 return nil
             }
             if err := stream.Send(&msg); err != nil {
+                // Stream send failed - propagate error
                 return err
             }
         }
@@ -83,7 +124,7 @@ func pumpChannelToStream[T any](
 }
 ```
 
-### Client Streaming (client sends multiple, server responds once)
+## Client Streaming - Use Connect API Directly
 
 **Proto:**
 ```protobuf
@@ -92,69 +133,52 @@ service UploadService {
 }
 ```
 
-**Generated Interface (idiomatic Go):**
+**Generated Interface (Direct Connect API):**
 ```go
 // UploadService is the interface plugin authors implement
 type UploadService interface {
-    // Upload receives chunks on a channel and returns result.
-    // The channel is closed when client finishes sending.
-    Upload(ctx context.Context, chunks <-chan *Chunk) (*UploadResult, error)
+    // Upload receives chunks from the client stream.
+    // Use stream.Receive() to read chunks.
+    // Return the result and any error.
+    Upload(ctx context.Context, stream *connect.ClientStream[Chunk]) (*UploadResult, error)
 }
 ```
 
-**Generated Adapter:**
+**Implementation Example:**
 ```go
-type uploadServiceHandler struct {
-    impl UploadService
-}
-
-func (h *uploadServiceHandler) Upload(
+func (s *uploadService) Upload(
     ctx context.Context,
     stream *connect.ClientStream[Chunk],
-) (*connect.Response[UploadResult], error) {
-    // Create buffered channel
-    ch := make(chan *Chunk, 10)
+) (*UploadResult, error) {
+    var totalBytes int64
 
-    // Pump stream to channel in background
-    errCh := make(chan error, 1)
-    go func() {
-        defer close(ch)
-        errCh <- pumpStreamToChannel(ctx, stream, ch)
-    }()
+    // Read from stream directly - no hidden goroutines
+    for stream.Receive() {
+        chunk := stream.Msg()
+        totalBytes += int64(len(chunk.Data))
 
-    // Call implementation with channel
-    result, err := h.impl.Upload(ctx, ch)
-
-    // Wait for pump goroutine to finish
-    pumpErr := <-errCh
-    if pumpErr != nil {
-        return nil, pumpErr
+        // Check context explicitly
+        if ctx.Err() != nil {
+            return nil, ctx.Err()
+        }
     }
-    if err != nil {
+
+    // Check for stream errors
+    if err := stream.Err(); err != nil {
         return nil, err
     }
 
-    return connect.NewResponse(result), nil
-}
-
-// pumpStreamToChannel receives from stream and sends to channel
-func pumpStreamToChannel[T any](
-    ctx context.Context,
-    stream *connect.ClientStream[T],
-    ch chan<- *T,
-) error {
-    for stream.Receive() {
-        select {
-        case <-ctx.Done():
-            return ctx.Err()
-        case ch <- stream.Msg():
-        }
-    }
-    return stream.Err()
+    return &UploadResult{TotalBytes: totalBytes}, nil
 }
 ```
 
-### Bidirectional Streaming (both send multiple)
+**Why no adapter?**
+- No hidden goroutines to manage
+- No complex error coordination needed
+- Stream.Receive() is already idiomatic Go
+- Implementation has full control over buffering and flow
+
+## Bidirectional Streaming - Use Connect API Directly
 
 **Proto:**
 ```protobuf
@@ -163,304 +187,206 @@ service ChatService {
 }
 ```
 
-**Generated Interface (callback-based for bidirectional):**
+**Generated Interface (Direct Connect API):**
 ```go
 // ChatService is the interface plugin authors implement
 type ChatService interface {
-    // Chat handles bidirectional message stream.
-    // incoming: channel of messages from client
-    // send: function to send message to client
-    // Returns when stream completes or errors
-    Chat(ctx context.Context, incoming <-chan *ChatMessage, send func(*ChatMessage) error) error
+    // Chat handles bidirectional message streaming.
+    // Use stream.Receive() to read incoming messages.
+    // Use stream.Send() to write outgoing messages.
+    // Return when complete or on error.
+    Chat(ctx context.Context, stream *connect.BidiStream[ChatMessage, ChatMessage]) error
 }
 ```
 
-**Generated Adapter:**
+**Implementation Example:**
 ```go
-type chatServiceHandler struct {
-    impl ChatService
-}
-
-func (h *chatServiceHandler) Chat(
+func (s *chatService) Chat(
     ctx context.Context,
     stream *connect.BidiStream[ChatMessage, ChatMessage],
 ) error {
-    // Create channel for incoming messages
-    incoming := make(chan *ChatMessage, 10)
-
-    // Pump stream to channel in background
-    errCh := make(chan error, 1)
+    // Create goroutine for receiving - YOU control this
+    recvErr := make(chan error, 1)
     go func() {
-        defer close(incoming)
-        errCh <- pumpBidiStreamToChannel(ctx, stream, incoming)
-    }()
+        for stream.Receive() {
+            msg := stream.Msg()
 
-    // Create send function
-    send := func(msg *ChatMessage) error {
-        return stream.Send(msg)
-    }
-
-    // Call implementation
-    implErr := h.impl.Chat(ctx, incoming, send)
-
-    // Wait for pump goroutine
-    pumpErr := <-errCh
-
-    // Return first error
-    if implErr != nil {
-        return implErr
-    }
-    return pumpErr
-}
-
-func pumpBidiStreamToChannel[T any](
-    ctx context.Context,
-    stream *connect.BidiStream[T, any],
-    ch chan<- *T,
-) error {
-    for {
-        msg, err := stream.Receive()
-        if err != nil {
-            if errors.Is(err, io.EOF) {
-                return nil
+            // Process and respond
+            response := &ChatMessage{
+                Text: "Echo: " + msg.Text,
             }
-            return err
+
+            if err := stream.Send(response); err != nil {
+                recvErr <- err
+                return
+            }
         }
-        select {
-        case <-ctx.Done():
-            return ctx.Err()
-        case ch <- msg:
-        }
-    }
-}
-```
-
-## Alternative: Bidirectional with Separate Channels
-
-Some implementations prefer separate channels:
-
-```go
-// ChatService alternative interface
-type ChatService interface {
-    // Chat handles bidirectional message stream.
-    // Returns a channel for outgoing messages.
-    // incoming: messages from client
-    // outgoing: messages to client (implementation sends, adapter receives)
-    Chat(ctx context.Context, incoming <-chan *ChatMessage) (<-chan *ChatMessage, error)
-}
-```
-
-**Adapter:**
-```go
-func (h *chatServiceHandler) Chat(
-    ctx context.Context,
-    stream *connect.BidiStream[ChatMessage, ChatMessage],
-) error {
-    incoming := make(chan *ChatMessage, 10)
-
-    // Pump incoming
-    go func() {
-        defer close(incoming)
-        pumpBidiStreamToChannel(ctx, stream, incoming)
+        recvErr <- stream.Err()
     }()
 
-    // Get outgoing channel from implementation
-    outgoing, err := h.impl.Chat(ctx, incoming)
-    if err != nil {
+    // Wait for completion or cancellation
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    case err := <-recvErr:
         return err
     }
-
-    // Pump outgoing to stream
-    return pumpChannelToStream(ctx, outgoing, stream)
 }
 ```
 
-## Backpressure Handling
+**Why no adapter?**
+- **Deadlock risk**: Dual-channel pattern can deadlock if send blocks receive
+- **Unclear lifecycle**: Which goroutine owns what? When do they finish?
+- **Race conditions**: Coordinating two goroutines adds complexity
+- **Loss of control**: Implementation can't control send/receive coordination
 
-### Channel Buffer Size
+With direct API access, YOU decide the goroutine structure and coordination strategy.
 
-**Configuration:**
+## Implementation Details
+
+### Error Channel Pattern
+
+The error channel must be buffered to prevent goroutine leaks:
+
 ```go
-type StreamConfig struct {
-    // ChannelBufferSize for stream-to-channel adapters.
-    // Larger buffers reduce blocking but increase memory.
-    // Default: 10
-    ChannelBufferSize int
-}
-```
-
-**Generated with configurable buffer:**
-```go
-func (h *uploadServiceHandler) Upload(
+func (s *logService) Tail(
     ctx context.Context,
-    stream *connect.ClientStream[Chunk],
-) (*connect.Response[UploadResult], error) {
-    bufSize := h.config.ChannelBufferSize
-    if bufSize == 0 {
-        bufSize = 10 // Default
-    }
-    ch := make(chan *Chunk, bufSize)
-
-    // ... pump and call impl
-}
-```
-
-### Blocking Behavior
-
-When channel is full, the pump goroutine blocks:
-
-```go
-func pumpStreamToChannel[T any](
-    ctx context.Context,
-    stream *connect.ClientStream[T],
-    ch chan<- *T,
-) error {
-    for stream.Receive() {
-        select {
-        case <-ctx.Done():
-            return ctx.Err()
-        case ch <- stream.Msg(): // Blocks if channel full
-            // This creates backpressure - stream read pauses
-        }
-    }
-    return stream.Err()
-}
-```
-
-This is **correct behavior**:
-- If implementation is slow consuming from channel, pump blocks
-- Blocking pump means stream reads pause
-- Stream flow control kicks in, slowing sender
-- Natural backpressure propagation
-
-## Error Propagation
-
-### Implementation Error
-
-```go
-func (s *myLogService) Tail(ctx context.Context, req *TailRequest) (<-chan *LogEntry, error) {
-    if req.Filename == "" {
-        return nil, connect.NewError(connect.CodeInvalidArgument,
-            errors.New("filename required"))
-    }
-
-    ch := make(chan *LogEntry)
-    go func() {
-        defer close(ch)
-        // ... send entries
-    }()
-    return ch, nil
-}
-
-// Adapter returns error immediately if impl returns error
-```
-
-### Error During Streaming
-
-```go
-func (s *myLogService) Tail(ctx context.Context, req *TailRequest) (<-chan *LogEntry, error) {
-    ch := make(chan *LogEntry)
+    req *TailRequest,
+) (<-chan *LogEntry, <-chan error) {
+    entries := make(chan *LogEntry, 32) // Buffered to prevent blocking
+    errs := make(chan error, 1)         // MUST be buffered size 1
 
     go func() {
-        defer close(ch)
+        defer close(entries) // ALWAYS close entries channel
 
         file, err := os.Open(req.Filename)
         if err != nil {
-            // Can't send error through channel!
-            // Options:
-            // 1. Close channel (stream ends normally, no error)
-            // 2. Use separate error channel
-            // 3. Store error in service, check in separate RPC
-            return
+            errs <- connect.NewError(connect.CodeNotFound, err)
+            return // Exit after sending error
+        }
+        defer file.Close()
+
+        scanner := bufio.NewScanner(file)
+        for scanner.Scan() {
+            entry := &LogEntry{Line: scanner.Text()}
+
+            select {
+            case <-ctx.Done():
+                // Don't send error on cancellation - adapter handles it
+                return
+            case entries <- entry:
+                // Sent successfully
+            }
         }
 
-        // ... read and send entries
+        if err := scanner.Err(); err != nil {
+            errs <- err
+        }
     }()
 
-    return ch, nil
+    return entries, errs
 }
 ```
 
-**Solution: Error channel pattern**
+**Critical Rules:**
+1. Error channel MUST be buffered (size 1)
+2. Send at most ONE error
+3. ALWAYS close entries channel (success or error)
+4. Don't send errors on context cancellation (adapter detects this)
+
+### Channel Buffer Size
+
+**Fixed at 32** - no configuration needed.
 
 ```go
-// Enhanced interface with error channel
-type LogService interface {
-    // Tail returns channels for entries and errors.
-    // Close entries channel when done.
-    // Send at most one error to error channel.
-    Tail(ctx context.Context, req *TailRequest) (
-        entries <-chan *LogEntry,
-        errs <-chan error,
-    )
-}
+entries := make(chan *LogEntry, 32)
+```
 
-// Adapter waits on both channels
-func (h *logServiceHandler) Tail(
-    ctx context.Context,
-    req *connect.Request[TailRequest],
-    stream *connect.ServerStream[LogEntry],
-) error {
-    entries, errs := h.impl.Tail(ctx, req.Msg)
+**Why 32?**
+- Large enough to prevent most blocking
+- Small enough to limit memory per stream
+- Good balance for typical RPC patterns
+- One less thing to configure
 
-    for {
-        select {
-        case <-ctx.Done():
-            return ctx.Err()
+**Why not configurable?**
+- Configuration adds complexity
+- Most users don't need it
+- Premature optimization
+- Can be added later if proven necessary
 
-        case err := <-errs:
-            if err != nil {
-                return err
-            }
+### Backpressure
 
-        case entry, ok := <-entries:
-            if !ok {
-                return nil // Stream complete
-            }
-            if err := stream.Send(entry); err != nil {
-                return err
-            }
-        }
-    }
+Backpressure happens naturally when the entries channel fills up:
+
+```go
+select {
+case <-ctx.Done():
+    return
+case entries <- entry: // Blocks if channel full (32 entries buffered)
+    // Implementation pauses until adapter reads from channel
+    // Adapter reads from channel and sends to stream
+    // If client is slow, stream Send() blocks
+    // Natural backpressure chain: client -> stream -> channel -> implementation
 }
 ```
+
+This is correct and safe. No special handling needed.
 
 ## Lifecycle Management
 
 ### Goroutine Ownership
 
-**Rule**: Adapters own pump goroutines, implementations own producer goroutines.
+**Implementation owns the goroutine**. It's created in the implementation and cleaned up when context is cancelled or work completes.
 
 ```go
-// ADAPTER owns this goroutine
-go func() {
-    defer close(ch)
-    pumpStreamToChannel(ctx, stream, ch)
-}()
+func (s *logService) Tail(
+    ctx context.Context,
+    req *TailRequest,
+) (<-chan *LogEntry, <-chan error) {
+    entries := make(chan *LogEntry, 32)
+    errs := make(chan error, 1)
 
-// IMPLEMENTATION owns this goroutine
-func (s *myService) Tail(ctx context.Context, req *TailRequest) (<-chan *LogEntry, error) {
-    ch := make(chan *LogEntry)
+    // Implementation creates and owns this goroutine
+    go func() {
+        defer close(entries) // MUST close channel when done
 
-    go func() { // Implementation owns this
-        defer close(ch)
-        // ... produce entries
+        // ... do work, respecting ctx.Done()
     }()
 
-    return ch, nil
+    return entries, errs
+}
+```
+
+**Adapter does NOT create goroutines**. It simply reads from channels in the main RPC goroutine.
+
+```go
+func (h *logServiceHandler) Tail(
+    ctx context.Context,
+    req *connect.Request[TailRequest],
+    stream *connect.ServerStream[LogEntry],
+) error {
+    // NO goroutines created here
+    entries, errs := h.impl.Tail(ctx, req.Msg)
+
+    // Read from channels in THIS goroutine
+    return pumpToStream(ctx, entries, errs, stream)
 }
 ```
 
 ### Context Cancellation
 
-All goroutines must respect context:
+Implementation MUST check context in two places:
 
 ```go
-func (s *myService) Tail(ctx context.Context, req *TailRequest) (<-chan *LogEntry, error) {
-    ch := make(chan *LogEntry)
+func (s *logService) Tail(
+    ctx context.Context,
+    req *TailRequest,
+) (<-chan *LogEntry, <-chan error) {
+    entries := make(chan *LogEntry, 32)
+    errs := make(chan error, 1)
 
     go func() {
-        defer close(ch)
+        defer close(entries)
 
         ticker := time.NewTicker(1 * time.Second)
         defer ticker.Stop()
@@ -468,294 +394,402 @@ func (s *myService) Tail(ctx context.Context, req *TailRequest) (<-chan *LogEntr
         for {
             select {
             case <-ctx.Done():
-                return // Goroutine exits
+                // CHECK 1: Between iterations
+                return
             case <-ticker.C:
-                entry := &LogEntry{...}
+                entry := &LogEntry{Timestamp: time.Now()}
+
                 select {
-                case ch <- entry:
+                case entries <- entry:
                 case <-ctx.Done():
+                    // CHECK 2: During send (prevents blocking on full channel)
                     return
                 }
             }
         }
     }()
 
-    return ch, nil
+    return entries, errs
 }
 ```
 
-### Cleanup on Error
+**Why two checks?**
+1. First check: Exit quickly between iterations
+2. Second check: Prevent blocking forever if channel is full and adapter stops reading
+
+### Cleanup Guarantees
+
+**Implementation contract:**
+- MUST close entries channel when goroutine exits
+- MUST respect context cancellation
+- MUST NOT leak goroutines
+
+**Adapter contract:**
+- Reads from channels until entries closes or error received
+- Propagates context cancellation
+- Returns when stream completes (no lingering goroutines)
+
+### Preventing Goroutine Leaks
 
 ```go
-func (h *uploadServiceHandler) Upload(
-    ctx context.Context,
-    stream *connect.ClientStream[Chunk],
-) (*connect.Response[UploadResult], error) {
-    ch := make(chan *Chunk, 10)
-
-    // Ensure pump goroutine completes before returning
-    var wg sync.WaitGroup
-    wg.Add(1)
-
-    go func() {
-        defer wg.Done()
-        defer close(ch)
-        pumpStreamToChannel(ctx, stream, ch)
-    }()
-
-    result, err := h.impl.Upload(ctx, ch)
-
-    wg.Wait() // Ensure goroutine cleaned up
-
-    if err != nil {
-        return nil, err
+// BAD: Goroutine might leak if context cancelled
+go func() {
+    for {
+        entry := produce()
+        entries <- entry // Blocks forever if adapter stops reading
     }
-    return connect.NewResponse(result), nil
-}
-```
+}()
 
-## Generated Code Examples
-
-### Server Streaming
-
-**Proto:**
-```protobuf
-service WatchService {
-    rpc Watch(WatchRequest) returns (stream WatchEvent);
-}
-```
-
-**Generated (go-side interface):**
-```go
-// WatchService is the interface to implement
-type WatchService interface {
-    Watch(ctx context.Context, req *WatchRequest) (<-chan *WatchEvent, error)
-}
-```
-
-**Generated (Connect handler):**
-```go
-// watchServiceHandler adapts WatchService to Connect
-type watchServiceHandler struct {
-    svc WatchService
-}
-
-func (h *watchServiceHandler) Watch(
-    ctx context.Context,
-    req *connect.Request[watchv1.WatchRequest],
-    stream *connect.ServerStream[watchv1.WatchEvent],
-) error {
-    ch, err := h.svc.Watch(ctx, req.Msg)
-    if err != nil {
-        return err
-    }
-    return streamChannelToResponse(ctx, ch, stream)
-}
-
-func NewWatchServiceHandler(svc WatchService, opts ...connect.HandlerOption) (string, http.Handler) {
-    handler := &watchServiceHandler{svc: svc}
-    return watchv1connect.NewWatchServiceHandler(handler, opts...)
-}
-```
-
-### Client Streaming
-
-**Proto:**
-```protobuf
-service AggregateService {
-    rpc Aggregate(stream Value) returns (Result);
-}
-```
-
-**Generated (go-side interface):**
-```go
-type AggregateService interface {
-    Aggregate(ctx context.Context, values <-chan *Value) (*Result, error)
-}
-```
-
-**Generated (Connect handler):**
-```go
-type aggregateServiceHandler struct {
-    svc AggregateService
-}
-
-func (h *aggregateServiceHandler) Aggregate(
-    ctx context.Context,
-    stream *connect.ClientStream[aggregatev1.Value],
-) (*connect.Response[aggregatev1.Result], error) {
-    ch := make(chan *aggregatev1.Value, 10)
-
-    done := make(chan error, 1)
-    go func() {
-        defer close(ch)
-        done <- receiveStreamToChannel(ctx, stream, ch)
-    }()
-
-    result, err := h.svc.Aggregate(ctx, ch)
-
-    if receiveErr := <-done; receiveErr != nil {
-        return nil, receiveErr
-    }
-    if err != nil {
-        return nil, err
-    }
-
-    return connect.NewResponse(result), nil
-}
-```
-
-## Subscription Manager Pattern
-
-For services that manage multiple concurrent subscriptions:
-
-```go
-type SubscriptionManager[K comparable, V any] struct {
-    mu          sync.RWMutex
-    subscribers map[K][]chan<- V
-}
-
-func NewSubscriptionManager[K comparable, V any]() *SubscriptionManager[K, V] {
-    return &SubscriptionManager[K, V]{
-        subscribers: make(map[K][]chan<- V),
-    }
-}
-
-func (sm *SubscriptionManager[K, V]) Subscribe(ctx context.Context, key K) <-chan V {
-    ch := make(chan V, 10)
-
-    sm.mu.Lock()
-    sm.subscribers[key] = append(sm.subscribers[key], ch)
-    sm.mu.Unlock()
-
-    // Cleanup on context cancel
-    go func() {
-        <-ctx.Done()
-        sm.unsubscribe(key, ch)
-    }()
-
-    return ch
-}
-
-func (sm *SubscriptionManager[K, V]) Publish(key K, value V) {
-    sm.mu.RLock()
-    subs := sm.subscribers[key]
-    sm.mu.RUnlock()
-
-    for _, ch := range subs {
+// GOOD: Always check context during send
+go func() {
+    defer close(entries)
+    for {
+        entry := produce()
         select {
-        case ch <- value:
-        default:
-            // Subscriber slow, skip
+        case entries <- entry:
+        case <-ctx.Done():
+            return // Clean exit
         }
     }
-}
+}()
+```
 
-func (sm *SubscriptionManager[K, V]) unsubscribe(key K, ch chan<- V) {
-    sm.mu.Lock()
-    defer sm.mu.Unlock()
+## Complete Generated Code Example
 
-    subs := sm.subscribers[key]
-    for i, sub := range subs {
-        if sub == ch {
-            sm.subscribers[key] = append(subs[:i], subs[i+1:]...)
-            close(ch)
-            break
-        }
-    }
+**Proto:**
+```protobuf
+service LogService {
+    rpc Tail(TailRequest) returns (stream LogEntry);
 }
 ```
 
-Usage:
-
+**Generated Interface (what you implement):**
 ```go
-type pubSubService struct {
-    mgr *SubscriptionManager[string, *Event]
-}
+package logv1
 
-func (s *pubSubService) Subscribe(ctx context.Context, req *SubscribeRequest) (<-chan *Event, error) {
-    return s.mgr.Subscribe(ctx, req.Topic), nil
-}
-
-func (s *pubSubService) Publish(ctx context.Context, req *PublishRequest) error {
-    s.mgr.Publish(req.Topic, req.Event)
-    return nil
+// LogService is the interface plugin authors implement.
+type LogService interface {
+    // Tail streams log entries for the requested file.
+    //
+    // Return:
+    //   - entries: Channel for streaming log entries to client
+    //   - errs: Channel for reporting errors (buffered, size 1)
+    //
+    // Contract:
+    //   - MUST close entries channel when done (success or error)
+    //   - MAY send at most one error to errs channel
+    //   - MUST respect ctx.Done() and clean up goroutines
+    //   - SHOULD buffer entries channel (recommended: 32)
+    Tail(ctx context.Context, req *TailRequest) (entries <-chan *LogEntry, errs <-chan error)
 }
 ```
 
-## Code Generation Strategy
-
-The `protoc-gen-connect-plugin` generator produces:
-
-1. **Go interface** with channels/callbacks (what user implements)
-2. **Connect adapter** (converts between interface and Connect streaming)
-3. **Handler registration** (convenience function)
-4. **Client wrapper** (optional, wraps Connect client with channel-based API)
-
-**Generator template (pseudo-code):**
+**Generated Adapter (Connect handler):**
 ```go
-func generateServerStreaming(method *Method) string {
-    return fmt.Sprintf(`
-// %s is the interface to implement
-type %s interface {
-    %s(ctx context.Context, req *%s) (<-chan *%s, error)
+package logv1
+
+import (
+    "context"
+    "connectrpc.com/connect"
+    logv1 "example.com/proto/log/v1"
+)
+
+// logServiceHandler adapts LogService to Connect streaming API
+type logServiceHandler struct {
+    impl LogService
 }
 
-// Handler adapter
-type %sHandler struct {
-    svc %s
-}
-
-func (h *%sHandler) %s(
+func (h *logServiceHandler) Tail(
     ctx context.Context,
-    req *connect.Request[%s],
-    stream *connect.ServerStream[%s],
+    req *connect.Request[logv1.TailRequest],
+    stream *connect.ServerStream[logv1.LogEntry],
 ) error {
-    ch, err := h.svc.%s(ctx, req.Msg)
-    if err != nil {
-        return err
-    }
-    return streamChannelToResponse(ctx, ch, stream)
+    entries, errs := h.impl.Tail(ctx, req.Msg)
+    return pumpToStream(ctx, entries, errs, stream)
 }
-`,
-        method.Service.Name,
-        method.Service.Name,
-        method.Name,
-        method.InputType,
-        method.OutputType,
-        // ... rest of template
-    )
+
+// pumpToStream is a generated helper function
+func pumpToStream[T any](
+    ctx context.Context,
+    ch <-chan T,
+    errs <-chan error,
+    stream *connect.ServerStream[T],
+) error {
+    for {
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        case err := <-errs:
+            return err
+        case msg, ok := <-ch:
+            if !ok {
+                return nil
+            }
+            if err := stream.Send(&msg); err != nil {
+                return err
+            }
+        }
+    }
+}
+
+// NewLogServiceHandler creates a Connect handler for LogService
+func NewLogServiceHandler(svc LogService, opts ...connect.HandlerOption) (string, http.Handler) {
+    handler := &logServiceHandler{impl: svc}
+    return logv1connect.NewLogServiceHandler(handler, opts...)
 }
 ```
 
-## Comparison with Direct Connect API
+## Example: Complete Implementation
 
-| Pattern | With Adapters | Direct Connect |
-|---------|---------------|----------------|
-| **Server Streaming** | `func() (<-chan T, error)` | `func(stream *ServerStream[T]) error` |
-| **Client Streaming** | `func(values <-chan T) (R, error)` | `func(stream *ClientStream[T]) (*Response[R], error)` |
-| **Bidirectional** | `func(in <-chan T, send func(R)) error` | `func(stream *BidiStream[T,R]) error` |
-| **Simplicity** | Higher (no stream API) | Lower (need stream API knowledge) |
-| **Control** | Lower (adapter decisions) | Higher (full control) |
-| **Goroutines** | Managed by adapter | Manual management |
+```go
+package myapp
+
+import (
+    "bufio"
+    "context"
+    "os"
+
+    "connectrpc.com/connect"
+    logv1 "example.com/proto/log/v1"
+)
+
+type logService struct {
+    logsDir string
+}
+
+func NewLogService(logsDir string) logv1.LogService {
+    return &logService{logsDir: logsDir}
+}
+
+func (s *logService) Tail(
+    ctx context.Context,
+    req *logv1.TailRequest,
+) (<-chan *logv1.LogEntry, <-chan error) {
+    entries := make(chan *logv1.LogEntry, 32)
+    errs := make(chan error, 1)
+
+    go func() {
+        defer close(entries) // ALWAYS close
+
+        // Validate request
+        if req.Filename == "" {
+            errs <- connect.NewError(connect.CodeInvalidArgument,
+                errors.New("filename required"))
+            return
+        }
+
+        // Open file
+        path := filepath.Join(s.logsDir, req.Filename)
+        file, err := os.Open(path)
+        if err != nil {
+            errs <- connect.NewError(connect.CodeNotFound, err)
+            return
+        }
+        defer file.Close()
+
+        // Stream lines
+        scanner := bufio.NewScanner(file)
+        lineNum := 0
+        for scanner.Scan() {
+            lineNum++
+            entry := &logv1.LogEntry{
+                LineNumber: int64(lineNum),
+                Text:       scanner.Text(),
+            }
+
+            select {
+            case entries <- entry:
+                // Sent successfully
+            case <-ctx.Done():
+                // Client disconnected, exit cleanly
+                return
+            }
+        }
+
+        // Check for scanner errors
+        if err := scanner.Err(); err != nil {
+            errs <- connect.NewError(connect.CodeInternal, err)
+        }
+    }()
+
+    return entries, errs
+}
+```
+
+## When NOT to Use Adapters
+
+Use Connect APIs directly instead of adapters when:
+
+1. **Request validation**: Return early errors before starting goroutines
+   ```go
+   // Use direct API
+   func (s *svc) Tail(ctx context.Context, stream *connect.ServerStream[Entry]) error {
+       if req.Filename == "" {
+           return connect.NewError(connect.CodeInvalidArgument, ...)
+       }
+       // Now stream
+   }
+   ```
+
+2. **Synchronous streaming**: Reading from an iterator or database cursor
+   ```go
+   // Use direct API - no goroutines needed
+   func (s *svc) Query(ctx context.Context, stream *connect.ServerStream[Row]) error {
+       rows, err := s.db.Query(...)
+       defer rows.Close()
+       for rows.Next() {
+           stream.Send(...)
+       }
+   }
+   ```
+
+3. **Client/Bidi streaming**: Always use direct API (no adapter provided)
+
+4. **Custom flow control**: Need precise control over buffering or backpressure
+
+5. **Complex coordination**: Multiple streams, conditional sending, etc.
+
+## Design Tradeoffs
+
+**What we gain:**
+- Simple, familiar channel-based code for server streaming
+- Clear error handling with error channels
+- No hidden goroutine lifecycle complexity
+
+**What we give up:**
+- Adapters only for server streaming (not client or bidi)
+- Must manage goroutines in implementation
+- Fixed buffer size (32) - not configurable
+- Error channel pattern is less familiar than returning errors directly
+
+**Why this is the right tradeoff:**
+- Server streaming is the most common pattern (pub/sub, logs, events)
+- Client/bidi streaming have too many edge cases for a safe abstraction
+- Explicit goroutines prevent "magic" lifecycle issues
+- Fixed buffer size eliminates one configuration dimension
+- Better to ship something minimal and proven than overdesign
 
 ## Implementation Checklist
 
-- [x] Server streaming adapter (chan -> stream)
-- [x] Client streaming adapter (stream -> chan)
-- [x] Bidirectional streaming adapters (callback and dual-channel)
-- [x] Backpressure handling strategy
-- [x] Error propagation patterns (error channel)
-- [x] Lifecycle management rules
-- [x] Context cancellation handling
-- [x] Subscription manager pattern
-- [x] Generated code examples
-- [x] Code generation strategy
+Phase 1 (MVP):
+- [ ] Implement `pumpToStream` helper function
+- [ ] Generate server streaming interface with dual-channel signature
+- [ ] Generate adapter for server streaming RPCs
+- [ ] Document error channel pattern in generated comments
+- [ ] Test: context cancellation cleans up goroutines
+- [ ] Test: error propagation through error channel
+- [ ] Test: backpressure with slow client
+
+Phase 2 (if needed):
+- [ ] Client streaming (direct Connect API in generated interface)
+- [ ] Bidirectional streaming (direct Connect API in generated interface)
+- [ ] Performance testing with large messages
+- [ ] Documentation: when NOT to use adapters
 
 ## Next Steps
 
-1. Implement adapter helper functions in `stream/adapters.go`
-2. Update `protoc-gen-connect-plugin` to generate adapters
-3. Add stream configuration options
-4. Write adapter tests with cancellation scenarios
-5. Document adapter patterns in getting started guide
+1. Implement `pumpToStream` in runtime package
+2. Update `protoc-gen-connect-plugin` template for server streaming
+3. Add generated code comments explaining lifecycle contract
+4. Write comprehensive tests for goroutine cleanup
+5. Update getting started guide with complete example
+
+## Testing Strategy
+
+These tests must pass to ensure lifecycle guarantees:
+
+### Test 1: Goroutine Cleanup on Success
+```go
+func TestServerStreaming_GoroutineCleanup_Success(t *testing.T) {
+    initial := runtime.NumGoroutine()
+
+    svc := &logService{}
+    // Call RPC, stream completes normally
+    // ...
+
+    // Wait for cleanup
+    time.Sleep(100 * time.Millisecond)
+
+    final := runtime.NumGoroutine()
+    if final > initial+1 { // +1 for test goroutine tolerance
+        t.Errorf("goroutine leak: initial=%d final=%d", initial, final)
+    }
+}
+```
+
+### Test 2: Goroutine Cleanup on Context Cancel
+```go
+func TestServerStreaming_GoroutineCleanup_Cancelled(t *testing.T) {
+    ctx, cancel := context.WithCancel(context.Background())
+
+    // Start streaming
+    entries, _ := svc.Tail(ctx, req)
+
+    // Cancel after first message
+    <-entries
+    cancel()
+
+    // Verify channel closes
+    _, ok := <-entries
+    if ok {
+        t.Error("entries channel not closed after cancel")
+    }
+
+    // Verify no goroutine leak
+    // ...
+}
+```
+
+### Test 3: Error Propagation
+```go
+func TestServerStreaming_ErrorPropagation(t *testing.T) {
+    entries, errs := svc.Tail(ctx, &TailRequest{Filename: "nonexistent"})
+
+    // Should receive error
+    select {
+    case err := <-errs:
+        if err == nil {
+            t.Error("expected error, got nil")
+        }
+    case <-time.After(1 * time.Second):
+        t.Error("timeout waiting for error")
+    }
+
+    // Entries channel should close
+    _, ok := <-entries
+    if ok {
+        t.Error("entries channel not closed after error")
+    }
+}
+```
+
+### Test 4: Backpressure
+```go
+func TestServerStreaming_Backpressure(t *testing.T) {
+    entries, _ := svc.Tail(ctx, req)
+
+    // Don't read from channel - let it fill up
+    time.Sleep(1 * time.Second)
+
+    // Implementation should block, not crash or drop messages
+    // Verify buffering behavior
+    // ...
+}
+```
+
+## Open Questions
+
+1. **Should we generate both adapter and direct API versions?**
+   - Pro: Users can choose based on needs
+   - Con: More generated code, more complexity
+   - Decision: Start adapter-only, add escape hatch if requested
+
+2. **Should error channel be required or optional?**
+   - Pro (required): Forces explicit error handling
+   - Con (required): More boilerplate for simple cases
+   - Decision: Required - better to be explicit
+
+3. **Should we provide helper for subscription management?**
+   - Pro: Common pattern, saves user code
+   - Con: Outside scope of adapter design
+   - Decision: Defer to Phase 2 or separate package

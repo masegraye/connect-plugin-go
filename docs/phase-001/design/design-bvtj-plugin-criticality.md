@@ -6,45 +6,56 @@
 
 ## Overview
 
-Plugin criticality defines how the system behaves when a plugin becomes unavailable. Some plugins are essential to operation (authentication), while others enable optional features (analytics). This design specifies how criticality is declared, how failures are handled, and how degradation modes work.
+Plugin criticality defines how the system behaves when a plugin becomes unavailable. Some plugins are essential to operation (authentication), while others enable optional features (analytics). This design specifies how criticality is declared and how failures are handled at startup.
 
 ## Design Goals
 
-1. **Explicit criticality**: Clear declaration of plugin importance
-2. **Graceful degradation**: Optional plugins fail gracefully
-3. **Fail-fast for critical**: Required plugins fail early and loudly
-4. **Observable**: Degraded state is visible and monitorable
+1. **Extreme simplicity**: Two criticality levels, not four
+2. **Startup-time decisions**: Fail at startup or continue gracefully
+3. **Application-owned state**: No framework-level "degraded mode" state machine
+4. **Observable**: Plugin availability is visible and monitorable
 5. **Simple defaults**: Most plugins should be optional
 
 ## Criticality Levels
 
 ```go
-// Criticality defines how plugin failures are handled.
+// Criticality defines how plugin failures are handled at startup.
 type Criticality int
 
 const (
     // CriticalityOptional - plugin failure is logged but app continues normally.
-    // Features depending on this plugin become unavailable.
-    // This is the default.
+    // Features depending on this plugin become unavailable. Application should
+    // implement fallback behavior (no-op implementation, degraded mode, etc.).
+    // This is the default for all plugins.
     CriticalityOptional Criticality = iota
 
     // CriticalityRequired - plugin failure prevents app startup.
-    // If plugin fails after startup, app enters degraded mode.
+    // The application cannot function without this plugin.
+    // Use for foundational plugins (authentication, primary database, etc.).
     CriticalityRequired
-
-    // CriticalityHard - plugin failure causes app to crash.
-    // Use sparingly for truly essential plugins (e.g., auth).
-    CriticalityHard
-
-    // CriticalityLazy - plugin not needed at startup but required on first use.
-    // Startup proceeds even if plugin is down, but first Dispense() fails if unavailable.
-    CriticalityLazy
 )
 ```
 
+### When to Use Each Level
+
+**Use CriticalityOptional (default) when:**
+- The plugin enables optional features (analytics, metrics, caching)
+- You can provide a fallback implementation (no-op, in-memory, degraded behavior)
+- The application core functionality works without it
+- Missing the feature is acceptable for users
+- Examples: analytics, feature flags, non-critical caching, recommendations
+
+**Use CriticalityRequired when:**
+- The application fundamentally cannot operate without this plugin
+- No reasonable fallback exists
+- Users cannot accomplish their primary tasks without it
+- Examples: authentication, primary data store, session management
+
+**Default assumption:** When in doubt, use CriticalityOptional and implement a fallback. Most plugins should be optional.
+
 ## Configuration
 
-### Per-Plugin Criticality
+Criticality is configured via a simple map in ClientConfig:
 
 ```go
 type ClientConfig struct {
@@ -54,53 +65,42 @@ type ClientConfig struct {
     // Plugins not in this map default to CriticalityOptional.
     PluginCriticality map[string]Criticality
 
-    // OnPluginFailure callback when a plugin fails.
-    // Called for all criticality levels.
-    OnPluginFailure func(plugin string, err error, criticality Criticality)
-
-    // OnDegraded callback when app enters degraded mode.
-    OnDegraded func(reason string)
+    // OnPluginUnavailable is called during startup when a plugin is unavailable.
+    // Called for all criticality levels before Connect() returns.
+    // For CriticalityRequired plugins, Connect() will return an error after this callback.
+    OnPluginUnavailable func(plugin string, err error, criticality Criticality)
 }
 
-// Example
+// Example: API service with required auth
 client := connectplugin.NewClient(&connectplugin.ClientConfig{
     Endpoint: "http://plugin:8080",
     Plugins:  pluginSet,
     PluginCriticality: map[string]Criticality{
-        "auth":      connectplugin.CriticalityHard,     // Crash if auth fails
-        "kv":        connectplugin.CriticalityRequired, // Degrade if KV fails
-        "analytics": connectplugin.CriticalityOptional, // Continue if analytics fails
+        "auth":      connectplugin.CriticalityRequired, // Fail startup without auth
+        "kv":        connectplugin.CriticalityRequired, // Fail startup without KV
+        "cache":     connectplugin.CriticalityOptional, // Continue without cache
+        "analytics": connectplugin.CriticalityOptional, // Continue without analytics
     },
-    OnPluginFailure: func(plugin string, err error, crit Criticality) {
-        log.Error("plugin failed",
+    OnPluginUnavailable: func(plugin string, err error, crit Criticality) {
+        log.Warn("plugin unavailable at startup",
             "plugin", plugin,
             "error", err,
             "criticality", crit)
     },
-    OnDegraded: func(reason string) {
-        metrics.RecordDegradation(reason)
-        alerting.NotifyOncall("Application degraded: " + reason)
-    },
 })
-```
 
-### Fluent API
-
-```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint: "http://plugin:8080",
-    Plugins:  pluginSet,
-}).
-    RequirePlugin("auth").      // CriticalityHard
-    RequirePlugin("kv").        // CriticalityRequired
-    OptionalPlugin("analytics") // CriticalityOptional
+// Connect() will fail if auth or kv are unavailable
+if err := client.Connect(ctx); err != nil {
+    // Required plugin missing - cannot start
+    log.Fatal("cannot start without required plugins", "error", err)
+}
 ```
 
 ## Failure Handling
 
-### Startup Failures
+### Startup Behavior
 
-**CriticalityHard:**
+**CriticalityRequired:**
 ```go
 func (c *Client) Connect(ctx context.Context) error {
     // Handshake
@@ -109,28 +109,8 @@ func (c *Client) Connect(ctx context.Context) error {
         return err
     }
 
-    // Validate critical plugins are available
-    for pluginName, crit := range c.cfg.PluginCriticality {
-        if crit != CriticalityHard {
-            continue
-        }
-
-        if !isPluginAvailable(resp.Plugins, pluginName) {
-            return fmt.Errorf("critical plugin %q is unavailable", pluginName)
-        }
-    }
-
-    return nil
-}
-```
-
-**CriticalityRequired:**
-```go
-func (c *Client) Connect(ctx context.Context) error {
-    // ... handshake
-
-    // Check required plugins
-    missingRequired := []string{}
+    // Check required plugins are available
+    var missingRequired []string
     for pluginName, crit := range c.cfg.PluginCriticality {
         if crit != CriticalityRequired {
             continue
@@ -138,15 +118,24 @@ func (c *Client) Connect(ctx context.Context) error {
 
         if !isPluginAvailable(resp.Plugins, pluginName) {
             missingRequired = append(missingRequired, pluginName)
+
+            // Notify via callback
+            if c.cfg.OnPluginUnavailable != nil {
+                c.cfg.OnPluginUnavailable(
+                    pluginName,
+                    fmt.Errorf("plugin not available"),
+                    crit,
+                )
+            }
         }
     }
 
+    // Fail startup if any required plugin is missing
     if len(missingRequired) > 0 {
-        // Enter degraded mode
-        c.setDegraded("Required plugins unavailable: " + strings.Join(missingRequired, ", "))
-        if c.cfg.OnDegraded != nil {
-            c.cfg.OnDegraded(c.degradedReason)
-        }
+        return fmt.Errorf(
+            "required plugins unavailable: %s",
+            strings.Join(missingRequired, ", "),
+        )
     }
 
     return nil
@@ -155,130 +144,97 @@ func (c *Client) Connect(ctx context.Context) error {
 
 **CriticalityOptional:**
 ```go
-// No special handling at startup
-// Dispense() will return error if plugin unavailable
-```
-
-**CriticalityLazy:**
-```go
+// Optional plugins are checked at startup but don't block Connect()
 func (c *Client) Connect(ctx context.Context) error {
-    // Skip validation for lazy plugins at startup
+    // ... handshake
+
+    // Track which optional plugins are unavailable
+    for pluginName, crit := range c.cfg.PluginCriticality {
+        if crit != CriticalityOptional {
+            continue
+        }
+
+        if !isPluginAvailable(resp.Plugins, pluginName) {
+            // Mark as unavailable for Dispense() checks
+            c.unavailablePlugins[pluginName] = true
+
+            // Notify via callback
+            if c.cfg.OnPluginUnavailable != nil {
+                c.cfg.OnPluginUnavailable(
+                    pluginName,
+                    fmt.Errorf("plugin not available"),
+                    crit,
+                )
+            }
+        }
+    }
+
+    // Continue even if optional plugins are missing
     return nil
 }
-
-func (c *Client) Dispense(name string) (any, error) {
-    if crit := c.cfg.PluginCriticality[name]; crit == CriticalityLazy {
-        // First access - validate now
-        if !c.isPluginAvailable(name) {
-            return nil, fmt.Errorf("lazy plugin %q is unavailable", name)
-        }
-    }
-    // ... normal dispense
-}
 ```
 
-### Runtime Failures
+### Runtime Behavior
 
-When a plugin fails during operation (detected via health monitoring):
+Criticality only affects **startup decisions**. After startup:
+
+- **All plugins** return errors from `Dispense()` if unavailable
+- **Applications** decide how to handle runtime failures
+- **No framework-level degraded mode** - applications manage their own state
 
 ```go
-type Client struct {
-    // ... other fields
-    degraded       bool
-    degradedReason string
-    mu             sync.RWMutex
+// Application handles runtime failures via error checking
+cacheSvc, err := connectplugin.DispenseTyped[cache.Service](client, "cache")
+if err != nil {
+    // Cache plugin unavailable - application decides what to do
+    // Option 1: Use fallback
+    cacheSvc = &inMemoryCache{}
+
+    // Option 2: Enter application-level degraded mode
+    app.setDegraded("cache unavailable")
+
+    // Option 3: Return error to caller
+    return fmt.Errorf("cache required: %w", err)
+}
+```
+
+### Why No Runtime Criticality Enforcement?
+
+The framework **does not** enforce criticality after startup because:
+
+1. **Application context matters**: What's "critical" may depend on the operation
+2. **State management complexity**: Framework-level degraded mode adds significant complexity
+3. **Recovery is application-specific**: Each application knows best how to recover
+4. **Observability is sufficient**: Health monitoring and metrics expose plugin status
+
+Applications that need runtime degraded mode should implement it themselves:
+
+```go
+type Application struct {
+    mu       sync.RWMutex
+    degraded bool
+    reason   string
 }
 
-func (c *Client) onHealthStatusChange(status HealthStatus) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
+func (a *Application) handlePluginFailure(pluginName string, err error) {
+    if pluginName == "critical-service" {
+        a.mu.Lock()
+        a.degraded = true
+        a.reason = fmt.Sprintf("%s failed: %v", pluginName, err)
+        a.mu.Unlock()
 
-    if status == HealthStatusUnhealthy {
-        // Check criticality of failed plugin
-        for pluginName, crit := range c.cfg.PluginCriticality {
-            switch crit {
-            case CriticalityHard:
-                // Crash the app
-                log.Fatal("Critical plugin failed", "plugin", pluginName)
-
-            case CriticalityRequired:
-                // Enter degraded mode
-                if !c.degraded {
-                    c.setDegraded(fmt.Sprintf("Required plugin %q failed", pluginName))
-                    if c.cfg.OnDegraded != nil {
-                        c.cfg.OnDegraded(c.degradedReason)
-                    }
-                }
-
-            case CriticalityOptional:
-                // Log but continue
-                log.Warn("Optional plugin failed", "plugin", pluginName)
-            }
-
-            // Callback for all levels
-            if c.cfg.OnPluginFailure != nil {
-                c.cfg.OnPluginFailure(pluginName, fmt.Errorf("health check failed"), crit)
-            }
-        }
+        // Application-specific handling
+        a.notifyOncall()
+        a.updateHealthEndpoint()
     }
 }
-
-func (c *Client) IsDegraded() bool {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    return c.degraded
-}
-
-func (c *Client) DegradedReason() string {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    return c.degradedReason
-}
 ```
 
-## Degraded Mode State Machine
+## Fallback Patterns
 
-```
-┌──────────────┐
-│   Healthy    │
-│              │
-│ - All plugins OK
-│ - Full functionality
-└──────┬───────┘
-       │
-       │ Required plugin fails
-       │ OR health check fails
-       │
-       ▼
-┌──────────────┐
-│  Degraded    │
-│              │
-│ - Some features unavailable
-│ - Monitoring alerts fired
-└──────┬───────┘
-       │
-       │ All required plugins recover
-       │ AND health checks pass
-       │
-       ▼
-┌──────────────┐
-│  Recovering  │
-│              │
-│ - Success threshold checks
-│ - Gradual re-enable
-└──────┬───────┘
-       │
-       │ Success threshold met
-       │
-       ▼
-┌──────────────┐
-│   Healthy    │
-└──────────────┘
-```
+Applications should implement fallback behavior for optional plugins:
 
-## Fallback Implementations
-
-For optional plugins, provide fallback implementations:
+### Pattern 1: No-op Implementation
 
 ```go
 // Application with optional analytics plugin
@@ -286,26 +242,68 @@ type Application struct {
     analytics analytics.Service
 }
 
-func NewApplication(
-    analyticsPlugin analytics.Service, // May be nil
-) *Application {
+func NewApplication(client *connectplugin.Client) *Application {
     app := &Application{}
 
-    if analyticsPlugin != nil {
-        app.analytics = analyticsPlugin
+    // Try to get analytics plugin
+    analyticsPlugin, err := connectplugin.DispenseTyped[analytics.Service](client, "analytics")
+    if err != nil {
+        // Optional plugin unavailable - use no-op fallback
+        log.Info("analytics plugin unavailable, using no-op implementation")
+        app.analytics = &noopAnalytics{}
     } else {
-        app.analytics = &noopAnalytics{} // Fallback
+        app.analytics = analyticsPlugin
     }
 
     return app
 }
 
-// Noop implementation
+// Noop implementation for optional feature
 type noopAnalytics struct{}
 
 func (n *noopAnalytics) Track(ctx context.Context, event *Event) error {
-    // Do nothing
+    // Do nothing - analytics disabled
     return nil
+}
+```
+
+### Pattern 2: Degraded Implementation
+
+```go
+// Cache with in-memory fallback
+type Application struct {
+    cache cache.Service
+}
+
+func NewApplication(client *connectplugin.Client) *Application {
+    app := &Application{}
+
+    cachePlugin, err := connectplugin.DispenseTyped[cache.Service](client, "cache")
+    if err != nil {
+        // Redis cache unavailable - use in-memory fallback
+        log.Warn("cache plugin unavailable, using in-memory fallback (degraded)")
+        app.cache = newInMemoryCache()
+    } else {
+        app.cache = cachePlugin
+    }
+
+    return app
+}
+```
+
+### Pattern 3: Error Propagation
+
+```go
+// Some operations require the plugin
+func (a *Application) PerformOperation(ctx context.Context) error {
+    // Try to get plugin
+    svc, err := connectplugin.DispenseTyped[service.Service](a.client, "optional-service")
+    if err != nil {
+        // Plugin unavailable - this specific operation fails
+        return fmt.Errorf("operation requires optional-service plugin: %w", err)
+    }
+
+    return svc.DoWork(ctx)
 }
 ```
 
@@ -315,345 +313,379 @@ func (n *noopAnalytics) Track(ctx context.Context, event *Event) error {
 type AppParams struct {
     fx.In
 
-    Auth      auth.Service                `name:"auth"`      // Required
-    KV        kv.KVStore                  `name:"kv"`        // Required
-    Analytics analytics.Service           `name:"analytics"` `optional:"true"` // Optional
+    Client *connectplugin.Client
 }
 
-func NewApplication(p AppParams) *Application {
-    app := &Application{
-        auth: p.Auth,
-        kv:   p.KV,
-    }
+func ProvideAuth(p AppParams) (auth.Service, error) {
+    // Required plugin - must be available
+    return connectplugin.DispenseTyped[auth.Service](p.Client, "auth")
+}
 
-    if p.Analytics != nil {
-        app.analytics = p.Analytics
-    } else {
-        app.analytics = &noopAnalytics{}
+func ProvideAnalytics(p AppParams) analytics.Service {
+    // Optional plugin - fallback if unavailable
+    svc, err := connectplugin.DispenseTyped[analytics.Service](p.Client, "analytics")
+    if err != nil {
+        log.Info("analytics unavailable, using no-op")
+        return &noopAnalytics{}
     }
+    return svc
+}
 
-    return app
+func NewApplication(
+    auth auth.Service,
+    analytics analytics.Service,
+) *Application {
+    // Auth is guaranteed available (required)
+    // Analytics may be no-op (optional)
+    return &Application{
+        auth:      auth,
+        analytics: analytics,
+    }
 }
 ```
 
-## Circuit Breaker Integration
+## Observability Hooks
 
-Criticality affects circuit breaker behavior:
+The framework provides observability into plugin availability without enforcing runtime behavior:
+
+### Plugin Status Tracking
 
 ```go
-type PluginCircuitBreaker struct {
-    criticality Criticality
-    breaker     *CircuitBreaker
+type Client struct {
+    mu                 sync.RWMutex
+    unavailablePlugins map[string]bool
 }
 
-func (pcb *PluginCircuitBreaker) Allow() error {
-    if err := pcb.breaker.Allow(); err != nil {
-        switch pcb.criticality {
-        case CriticalityHard:
-            // Critical plugin - escalate to panic or app-level error
-            return fmt.Errorf("critical plugin circuit open: %w", err)
+// IsPluginAvailable reports whether a plugin is currently available.
+// This is informational only - criticality is not enforced after startup.
+func (c *Client) IsPluginAvailable(name string) bool {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    return !c.unavailablePlugins[name]
+}
 
-        case CriticalityRequired:
-            // Required plugin - return error, enter degraded mode
-            return err
+// ListUnavailablePlugins returns names of plugins that are unavailable.
+func (c *Client) ListUnavailablePlugins() []string {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
 
-        case CriticalityOptional:
-            // Optional - return error but don't propagate to app level
-            return err
-
-        case CriticalityLazy:
-            // Same as required for lazy
-            return err
-        }
+    var unavailable []string
+    for name := range c.unavailablePlugins {
+        unavailable = append(unavailable, name)
     }
-    return nil
+    return unavailable
 }
 ```
 
-## Partial Availability
-
-Plugins may be partially available (some methods work, others fail):
+### Health Endpoint Integration
 
 ```go
-// PluginStatus tracks per-method health
-type PluginStatus struct {
-    Overall     HealthStatus
-    PerMethod   map[string]HealthStatus
-    Degraded    bool
-    DegradedAt  time.Time
-    LastError   error
-}
+func healthHandler(client *connectplugin.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        unavailable := client.ListUnavailablePlugins()
 
-// Example: Cache plugin with degraded mode
-type cacheService struct {
-    redis *redis.Client
-    fallback map[string][]byte // In-memory fallback
-    degraded bool
-}
-
-func (c *cacheService) Get(ctx context.Context, key string) ([]byte, error) {
-    if !c.degraded {
-        val, err := c.redis.Get(ctx, key).Bytes()
-        if err == nil {
-            return val, nil
+        if len(unavailable) > 0 {
+            w.WriteHeader(http.StatusServiceUnavailable)
+            json.NewEncoder(w).Encode(map[string]any{
+                "status":      "degraded",
+                "unavailable": unavailable,
+            })
+            return
         }
 
-        // Redis failed - enter degraded mode
-        c.degraded = true
-        log.Warn("Cache degraded, using in-memory fallback")
-    }
-
-    // Use fallback
-    return c.fallback[key], nil
-}
-
-func (c *cacheService) HealthCheck() HealthStatus {
-    if err := c.redis.Ping(ctx).Err(); err != nil {
-        return HealthStatusDegraded // Not fully down, but degraded
-    }
-    c.degraded = false
-    return HealthStatusHealthy
-}
-```
-
-## Failure Mode Catalog
-
-| Failure | CriticalityHard | CriticalityRequired | CriticalityOptional | CriticalityLazy |
-|---------|-----------------|---------------------|---------------------|-----------------|
-| **Startup unavailable** | Fail startup | Enter degraded | Continue | Continue |
-| **Health check fails** | Crash app | Enter degraded | Log warning | N/A (not checked) |
-| **Circuit opens** | Propagate error | Enter degraded | Return fallback | Propagate error |
-| **Transient error** | Retry, then crash | Retry, then degrade | Retry, then fallback | Retry, then error |
-| **Plugin recovers** | Resume | Exit degraded | Resume | Resume |
-
-## Degradation Signaling
-
-### HTTP Header
-
-Degraded applications should signal their state:
-
-```go
-// Middleware adds degradation header
-func DegradationMiddleware(client *connectplugin.Client) func(http.Handler) http.Handler {
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            if client.IsDegraded() {
-                w.Header().Set("X-Service-Degraded", "true")
-                w.Header().Set("X-Degraded-Reason", client.DegradedReason())
-            }
-            next.ServeHTTP(w, r)
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(map[string]any{
+            "status": "healthy",
         })
     }
 }
 ```
 
-### Health Endpoint
+
+## Failure Mode Catalog
+
+| Failure | CriticalityRequired | CriticalityOptional |
+|---------|---------------------|---------------------|
+| **Startup: Plugin unavailable** | `Connect()` returns error, app fails to start | `Connect()` succeeds, plugin marked unavailable |
+| **Startup: Handshake fails** | `Connect()` returns error | `Connect()` returns error |
+| **Runtime: Dispense() called** | Returns error (app handles) | Returns error (app uses fallback) |
+| **Runtime: Health check fails** | Status exposed via observability | Status exposed via observability |
+| **Runtime: Plugin recovers** | Subsequent `Dispense()` succeeds | Subsequent `Dispense()` succeeds |
+
+**Key principle:** Framework handles startup decisions. Applications handle runtime decisions.
+
+### Metrics Integration
 
 ```go
-// /healthz returns 200 if alive, even if degraded
-// /readyz returns 503 if degraded
-func healthzHandler(client *connectplugin.Client) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        if client.IsDegraded() {
-            w.WriteHeader(http.StatusServiceUnavailable)
-            json.NewEncoder(w).Encode(map[string]any{
-                "status":   "degraded",
-                "reason":   client.DegradedReason(),
-                "critical": false, // Still serving
-            })
-            return
-        }
-        w.WriteHeader(http.StatusOK)
-        w.Write([]byte("ok"))
-    }
-}
-```
-
-### Metrics
-
-```go
-// Prometheus metrics for degradation
+// Prometheus metrics for plugin availability
 var (
-    degradedGauge = promauto.NewGauge(prometheus.GaugeOpts{
-        Name: "app_degraded",
-        Help: "1 if application is in degraded mode, 0 otherwise",
-    })
-
     pluginAvailability = promauto.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "plugin_available",
-        Help: "1 if plugin is available, 0 otherwise",
+        Name: "connectplugin_available",
+        Help: "1 if plugin is available, 0 if unavailable",
+    }, []string{"plugin", "criticality"})
+
+    pluginStartupFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+        Name: "connectplugin_startup_failures_total",
+        Help: "Number of plugins that were unavailable at startup",
     }, []string{"plugin", "criticality"})
 )
 
-func (c *Client) onHealthStatusChange(status HealthStatus) {
-    // ... degradation logic
+// In client initialization
+func (c *Client) Connect(ctx context.Context) error {
+    // ... check plugins
 
-    if c.degraded {
-        degradedGauge.Set(1)
-    } else {
-        degradedGauge.Set(0)
+    for pluginName, crit := range c.cfg.PluginCriticality {
+        available := isPluginAvailable(resp.Plugins, pluginName)
+
+        // Record metrics
+        if available {
+            pluginAvailability.WithLabelValues(
+                pluginName,
+                crit.String(),
+            ).Set(1)
+        } else {
+            pluginAvailability.WithLabelValues(
+                pluginName,
+                crit.String(),
+            ).Set(0)
+
+            pluginStartupFailures.WithLabelValues(
+                pluginName,
+                crit.String(),
+            ).Inc()
+        }
     }
+
+    // ... rest of startup logic
 }
 ```
 
 ## Example Configurations
 
-### Microservice with Critical Auth
+### Microservice with Required Auth and Database
 
 ```go
 client := connectplugin.NewClient(&connectplugin.ClientConfig{
     Endpoint: "http://plugin:8080",
     Plugins: connectplugin.PluginSet{
         "auth":      &authPlugin{},
-        "kv":        &kvPlugin{},
+        "database":  &databasePlugin{},
         "cache":     &cachePlugin{},
         "analytics": &analyticsPlugin{},
     },
     PluginCriticality: map[string]Criticality{
-        "auth":      connectplugin.CriticalityHard,     // Must have
-        "kv":        connectplugin.CriticalityRequired, // Degrade without
-        "cache":     connectplugin.CriticalityOptional, // Nice to have
-        "analytics": connectplugin.CriticalityOptional, // Nice to have
+        "auth":     connectplugin.CriticalityRequired, // Cannot operate without auth
+        "database": connectplugin.CriticalityRequired, // Cannot operate without DB
+        // cache and analytics default to CriticalityOptional
     },
-    OnDegraded: func(reason string) {
-        log.Error("Service degraded", "reason", reason)
-        pagerduty.Alert("Production service degraded: " + reason)
+    OnPluginUnavailable: func(plugin string, err error, crit Criticality) {
+        log.Warn("plugin unavailable",
+            "plugin", plugin,
+            "error", err,
+            "criticality", crit)
     },
 })
+
+// Connect will fail if auth or database are unavailable
+if err := client.Connect(ctx); err != nil {
+    log.Fatal("cannot start application", "error", err)
+}
+
+// Application code can safely assume auth and database are available
+auth, _ := connectplugin.DispenseTyped[auth.Service](client, "auth")
+db, _ := connectplugin.DispenseTyped[database.Store](client, "database")
+
+// Optional plugins may be unavailable - use fallbacks
+cache, err := connectplugin.DispenseTyped[cache.Service](client, "cache")
+if err != nil {
+    cache = newInMemoryCache() // Fallback
+}
+
+analytics, err := connectplugin.DispenseTyped[analytics.Service](client, "analytics")
+if err != nil {
+    analytics = &noopAnalytics{} // Fallback
+}
 ```
 
-### CLI Tool with All Optional
+### CLI Tool with All Optional Plugins
 
 ```go
-// CLI tools often don't need strict requirements
+// CLI tools often work with degraded functionality
 client := connectplugin.NewClient(&connectplugin.ClientConfig{
     Endpoint: "http://plugin:8080",
     Plugins:  pluginSet,
-    // All default to CriticalityOptional
-    OnPluginFailure: func(plugin string, err error, crit Criticality) {
-        fmt.Fprintf(os.Stderr, "Warning: Plugin %s unavailable: %v\n", plugin, err)
-        fmt.Fprintf(os.Stderr, "Continuing with reduced functionality.\n")
-    },
-})
-```
-
-### Batch Job with Lazy Dependencies
-
-```go
-client := connectplugin.NewClient(&connectplugin.ClientConfig{
-    Endpoint:    "http://plugin:8080",
-    LazyConnect: true,
-    Plugins:     pluginSet,
-    PluginCriticality: map[string]Criticality{
-        "email": connectplugin.CriticalityLazy, // Only needed if job fails
+    // All plugins default to CriticalityOptional
+    OnPluginUnavailable: func(plugin string, err error, crit Criticality) {
+        fmt.Fprintf(os.Stderr, "Warning: %s unavailable, some features disabled\n", plugin)
     },
 })
 
-// Job runs
-func runJob() error {
-    if err := processData(); err != nil {
-        // Only now do we need email plugin
-        emailSvc, err := connectplugin.DispenseTyped[email.Service](client, "email")
-        if err != nil {
-            log.Error("Cannot send failure notification", "error", err)
-            return err
-        }
-        emailSvc.SendAlert(ctx, err.Error())
-    }
-    return nil
+if err := client.Connect(ctx); err != nil {
+    // Only handshake-level errors cause failure
+    log.Fatal("cannot connect to plugin server", "error", err)
+}
+
+// Try to use features, degrade gracefully
+if formatter, err := client.Dispense("formatter"); err == nil {
+    // Pretty formatting available
+    output = formatter.Format(data)
+} else {
+    // Fallback to basic formatting
+    output = fmt.Sprintf("%v", data)
 }
 ```
 
-## Recovery Behavior
-
-### Required Plugin Recovery
-
-When a required plugin recovers, exit degraded mode:
+### Web Service with Phased Startup
 
 ```go
-func (c *Client) onHealthStatusChange(plugin string, status HealthStatus) {
+// Start with minimal required plugins, add optional ones later
+client := connectplugin.NewClient(&connectplugin.ClientConfig{
+    Endpoint: "http://plugin:8080",
+    Plugins:  pluginSet,
+    PluginCriticality: map[string]Criticality{
+        "auth":    connectplugin.CriticalityRequired, // Needed for requests
+        "session": connectplugin.CriticalityRequired, // Needed for requests
+        // All others optional
+    },
+})
+
+if err := client.Connect(ctx); err != nil {
+    return fmt.Errorf("cannot start server: %w", err)
+}
+
+// Server can start - required plugins available
+// Optional plugins might be unavailable, but we can still serve requests
+server.Start()
+```
+
+## Plugin Recovery
+
+When a plugin becomes available again after being unavailable:
+
+```go
+// Health monitoring updates plugin availability status
+func (c *Client) updatePluginStatus(plugin string, available bool) {
     c.mu.Lock()
     defer c.mu.Unlock()
 
-    if status == HealthStatusHealthy {
-        crit := c.cfg.PluginCriticality[plugin]
-        if crit == CriticalityRequired && c.degraded {
-            // Check if all required plugins are now healthy
-            if c.allRequiredPluginsHealthy() {
-                log.Info("Exiting degraded mode - all required plugins recovered")
-                c.degraded = false
-                c.degradedReason = ""
-                degradedGauge.Set(0)
-            }
+    wasUnavailable := c.unavailablePlugins[plugin]
+
+    if available {
+        delete(c.unavailablePlugins, plugin)
+
+        if wasUnavailable {
+            log.Info("plugin recovered", "plugin", plugin)
+            pluginAvailability.WithLabelValues(
+                plugin,
+                c.cfg.PluginCriticality[plugin].String(),
+            ).Set(1)
+        }
+    } else {
+        c.unavailablePlugins[plugin] = true
+
+        if !wasUnavailable {
+            log.Warn("plugin became unavailable", "plugin", plugin)
+            pluginAvailability.WithLabelValues(
+                plugin,
+                c.cfg.PluginCriticality[plugin].String(),
+            ).Set(0)
         }
     }
 }
 ```
 
-### Recovery Threshold
+### Application-Level Recovery Handling
 
-Prevent flapping between healthy and degraded:
+Applications that implement their own degraded mode can react to recovery:
 
 ```go
-type RecoveryConfig struct {
-    // SuccessThreshold consecutive health checks before exiting degraded mode
-    SuccessThreshold int
-
-    // MinDegradedDuration before allowing recovery
-    MinDegradedDuration time.Duration
+type Application struct {
+    client   *connectplugin.Client
+    degraded atomic.Bool
 }
 
-func (c *Client) canExitDegraded() bool {
-    if !c.degraded {
-        return false
-    }
+func (a *Application) monitorPluginHealth(ctx context.Context) {
+    ticker := time.NewTicker(10 * time.Second)
+    defer ticker.Stop()
 
-    // Must be degraded for minimum duration
-    if time.Since(c.degradedAt) < c.cfg.RecoveryConfig.MinDegradedDuration {
-        return false
-    }
-
-    // All required plugins must have consecutive successes
-    for pluginName, crit := range c.cfg.PluginCriticality {
-        if crit == CriticalityRequired {
-            if c.healthMonitor.ConsecutiveSuccesses(pluginName) < c.cfg.RecoveryConfig.SuccessThreshold {
-                return false
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            // Check if previously unavailable plugins have recovered
+            if a.degraded.Load() {
+                unavailable := a.client.ListUnavailablePlugins()
+                if len(unavailable) == 0 {
+                    log.Info("all plugins recovered, exiting degraded mode")
+                    a.degraded.Store(false)
+                    a.onRecovered()
+                }
             }
         }
     }
+}
 
-    return true
+func (a *Application) onRecovered() {
+    // Application-specific recovery logic
+    metrics.RecordRecovery()
+    alerting.ResolveIncident()
 }
 ```
 
-## Comparison with go-plugin
+## Design Rationale
+
+### Why Only Two Levels?
+
+The original design had four levels (Optional, Required, Hard, Lazy). This was **too complex**:
+
+1. **CriticalityHard** (runtime crash): Dangerous and unpredictable. Applications should decide crash policy.
+2. **CriticalityLazy** (validate on first use): Niche use case that adds complexity. Apps can implement this themselves.
+3. **Degraded mode state machine**: Framework-level state management adds significant complexity with minimal benefit.
+
+**Two levels is sufficient:**
+- **Optional**: Continue without plugin (99% of plugins)
+- **Required**: Cannot start without plugin (authentication, primary DB)
+
+### Why No Runtime Enforcement?
+
+Criticality only affects **startup** because:
+
+1. **Context matters**: Whether a failure is "critical" depends on the operation
+2. **Application knows best**: Applications understand their own degradation needs
+3. **State complexity**: Framework-level degraded mode adds too much complexity
+4. **Observability is enough**: Health monitoring exposes status; apps decide what to do
+
+### Comparison with go-plugin
 
 | Aspect | go-plugin | connect-plugin |
 |--------|-----------|----------------|
-| **Criticality** | All or nothing (subprocess) | Per-plugin configurable |
-| **Startup failure** | Entire client fails | Configurable per plugin |
-| **Runtime failure** | Process exits | Degraded mode or crash |
-| **Recovery** | Restart process | Automatic via health checks |
-| **Observable** | Binary (up/down) | Degraded state + metrics |
+| **Criticality** | All or nothing (subprocess crash) | Per-plugin configurable |
+| **Startup failure** | Client.Start() fails, process exits | Configurable per plugin |
+| **Runtime failure** | Entire process exits | Returns errors, app handles |
+| **Recovery** | Restart entire process | Automatic via health checks |
+| **Observable** | Binary (running/crashed) | Per-plugin availability + metrics |
+| **State management** | None (process is the state) | Applications manage their own state |
 
 ## Implementation Checklist
 
-- [x] Criticality enum definition
-- [x] Per-plugin criticality configuration
-- [x] Startup failure handling (hard, required, optional, lazy)
-- [x] Runtime failure handling via health monitoring
-- [x] Degraded mode state management
-- [x] Recovery behavior with threshold
-- [x] Degradation signaling (HTTP headers, metrics)
-- [x] Fallback implementation pattern
-- [x] fx integration with optional dependencies
-- [x] Circuit breaker integration
-- [x] Example configurations
+- [ ] `Criticality` enum with two values (Optional, Required)
+- [ ] `PluginCriticality` map in `ClientConfig`
+- [ ] `OnPluginUnavailable` callback in `ClientConfig`
+- [ ] Startup validation in `Connect()` method
+- [ ] `IsPluginAvailable()` and `ListUnavailablePlugins()` observability methods
+- [ ] Plugin status tracking in health monitor
+- [ ] Prometheus metrics for plugin availability
+- [ ] Tests for required plugin startup failure
+- [ ] Tests for optional plugin fallback patterns
+- [ ] Documentation with clear guidance on choosing criticality levels
 
 ## Next Steps
 
-1. Implement criticality types in `client.go`
-2. Integrate with health monitoring
-3. Add degradation metrics
-4. Write tests for each criticality level
-5. Document best practices for choosing criticality
+1. Implement `Criticality` type and configuration in `client.go`
+2. Add startup validation logic in `Connect()` method
+3. Integrate with health monitoring for status tracking
+4. Add observability methods (`IsPluginAvailable`, etc.)
+5. Implement Prometheus metrics
+6. Write comprehensive tests for both criticality levels
+7. Document best practices and example patterns

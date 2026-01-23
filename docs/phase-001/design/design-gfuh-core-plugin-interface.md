@@ -22,6 +22,10 @@ The core plugin interface defines how plugins are identified, instantiated on th
 // Plugin defines a plugin that can be served or dispensed.
 // This is the core abstraction - all plugins implement this interface.
 type Plugin interface {
+    // Metadata returns plugin metadata including the service path.
+    // This is used for validation and path conflict detection.
+    Metadata() PluginMetadata
+
     // ConnectServer returns a Connect HTTP handler for this plugin.
     // The impl parameter is the actual implementation (e.g., &KVStoreImpl{}).
     // Returns a handler that will be registered with the HTTP mux.
@@ -33,26 +37,35 @@ type Plugin interface {
     // Returns an interface{} that callers should type-assert.
     ConnectClient(baseURL string, httpClient connect.HTTPClient) (any, error)
 }
+
+// PluginMetadata contains metadata about a plugin.
+type PluginMetadata struct {
+    // Path is the service path (e.g., "/kv.v1.KVService/").
+    Path string
+}
 ```
 
 **Key decisions:**
 
 1. **Single interface**: No Protocol/GRPCPlugin split - Connect is the only protocol
-2. **Server returns handler**: More flexible than go-plugin's registration approach
-3. **Server returns path**: Each plugin defines its URL path (e.g., `/kv.v1.KVService/`)
-4. **Client returns baseURL**: Simpler than passing full connection
-5. **Any types**: Flexibility for different plugin interfaces
-6. **No broker parameter**: Bidirectional handled separately via capabilities
+2. **Metadata method**: Separate method for path validation without nil implementations
+3. **Server returns handler**: More flexible than go-plugin's registration approach
+4. **Server returns path**: Each plugin defines its URL path (e.g., `/kv.v1.KVService/`)
+5. **Client returns baseURL**: Simpler than passing full connection
+6. **Any types**: Flexibility for different plugin interfaces
+7. **No broker parameter**: Bidirectional handled separately via capabilities
 
 ### Comparison with go-plugin
 
 | Aspect | go-plugin | connect-plugin |
 |--------|-----------|----------------|
 | **Interface count** | 2 (Plugin, GRPCPlugin) | 1 (Plugin) |
+| **Validation** | Via ConnectServer(nil) | Via Metadata() method |
 | **Server method** | `GRPCServer(*Broker, *grpc.Server) error` | `ConnectServer(impl any) (string, http.Handler, error)` |
 | **Client method** | `GRPCClient(ctx, *Broker, *grpc.ClientConn) (any, error)` | `ConnectClient(baseURL, httpClient) (any, error)` |
 | **Broker** | Passed to methods | Separate capability system |
 | **Return** | Client: interface, Server: registers | Both: concrete types |
+| **Primary API** | Untyped Dispense() | Typed DispenseTyped[I]() |
 
 ## PluginSet Type
 
@@ -81,10 +94,11 @@ func (ps PluginSet) Keys() []string {
 func (ps PluginSet) Validate() error {
     paths := make(map[string]string)
     for name, plugin := range ps {
-        // Get path by creating a dummy handler
-        path, _, err := plugin.ConnectServer(nil)
-        if err != nil {
-            return fmt.Errorf("plugin %q: %w", name, err)
+        // Get path from metadata
+        metadata := plugin.Metadata()
+        path := metadata.Path
+        if path == "" {
+            return fmt.Errorf("plugin %q: empty path", name)
         }
         if existing, ok := paths[path]; ok {
             return fmt.Errorf("plugin %q path %q conflicts with plugin %q", name, path, existing)
@@ -119,153 +133,60 @@ func AsTyped[I any](p Plugin) (TypedPlugin[I], bool) {
 
 ## Example: Hand-Written Plugin (No Codegen)
 
-### Step 1: Define the interface
+**Note:** Hand-written plugins require significant boilerplate (~140+ lines for a simple 3-method interface). For production use, **we strongly recommend using codegen** (`protoc-gen-connect-plugin`) which generates all plugin wrapper code automatically. Hand-written plugins are shown here for completeness but should be reserved for advanced use cases or custom plugin patterns.
 
-```go
-// kv/interface.go
+For a complete hand-written plugin example with all adapter code, see the examples directory. The pattern requires:
+1. Define your Go interface (e.g., `KVStore`)
+2. Define protobuf schema matching the interface
+3. Generate Connect code with `protoc-gen-connect-go`
+4. Write a plugin wrapper implementing `Plugin` interface
+5. Write adapter code for server (Go interface → Connect service)
+6. Write adapter code for client (Connect client → Go interface)
 
-package kv
+### Basic Usage Pattern
 
-// KVStore is the interface for key-value storage.
-type KVStore interface {
-    Get(ctx context.Context, key string) ([]byte, error)
-    Put(ctx context.Context, key string, value []byte) error
-    Delete(ctx context.Context, key string) error
-}
-```
-
-### Step 2: Define protobuf schema
-
-```protobuf
-// kv/v1/kv.proto
-
-syntax = "proto3";
-package kv.v1;
-
-service KVService {
-    rpc Get(GetRequest) returns (GetResponse);
-    rpc Put(PutRequest) returns (PutResponse);
-    rpc Delete(DeleteRequest) returns (DeleteResponse);
-}
-
-message GetRequest {
-    string key = 1;
-}
-
-message GetResponse {
-    bytes value = 1;
-}
-
-message PutRequest {
-    string key = 1;
-    bytes value = 2;
-}
-
-message PutResponse {}
-
-message DeleteRequest {
-    string key = 1;
-}
-
-message DeleteResponse {}
-```
-
-### Step 3: Create plugin implementation
+For completeness, here's the minimal plugin wrapper structure (full adapter code omitted):
 
 ```go
 // kv/plugin.go
-
 package kv
 
 import (
-    "context"
     "net/http"
-
     "connectrpc.com/connect"
-    kvv1 "myapp/gen/kv/v1"
+    connectplugin "github.com/yourorg/connect-plugin-go"
     "myapp/gen/kv/v1/kvv1connect"
 )
 
-// ConnectPlugin implements connectplugin.Plugin for the KV interface.
 type ConnectPlugin struct{}
+
+func (p *ConnectPlugin) Metadata() connectplugin.PluginMetadata {
+    return connectplugin.PluginMetadata{
+        Path: kvv1connect.KVServiceName, // e.g., "/kv.v1.KVService/"
+    }
+}
 
 func (p *ConnectPlugin) ConnectServer(impl any) (string, http.Handler, error) {
     kvImpl, ok := impl.(KVStore)
     if !ok {
         return "", nil, fmt.Errorf("impl must implement KVStore, got %T", impl)
     }
-
-    // Wrap the implementation as a Connect service
-    server := &kvServer{impl: kvImpl}
-    path, handler := kvv1connect.NewKVServiceHandler(server)
-    return path, handler, nil
+    // Wrap impl with adapter → Connect service handler
+    // ... adapter code omitted (~70 lines) ...
 }
 
 func (p *ConnectPlugin) ConnectClient(baseURL string, httpClient connect.HTTPClient) (any, error) {
     client := kvv1connect.NewKVServiceClient(httpClient, baseURL)
-    return &kvClient{client: client}, nil
-}
-
-// kvServer adapts KVStore to the Connect service interface
-type kvServer struct {
-    impl KVStore
-}
-
-func (s *kvServer) Get(ctx context.Context, req *connect.Request[kvv1.GetRequest]) (*connect.Response[kvv1.GetResponse], error) {
-    value, err := s.impl.Get(ctx, req.Msg.Key)
-    if err != nil {
-        return nil, err
-    }
-    return connect.NewResponse(&kvv1.GetResponse{Value: value}), nil
-}
-
-func (s *kvServer) Put(ctx context.Context, req *connect.Request[kvv1.PutRequest]) (*connect.Response[kvv1.PutResponse], error) {
-    err := s.impl.Put(ctx, req.Msg.Key, req.Msg.Value)
-    if err != nil {
-        return nil, err
-    }
-    return connect.NewResponse(&kvv1.PutResponse{}), nil
-}
-
-func (s *kvServer) Delete(ctx context.Context, req *connect.Request[kvv1.DeleteRequest]) (*connect.Response[kvv1.DeleteResponse], error) {
-    err := s.impl.Delete(ctx, req.Msg.Key)
-    if err != nil {
-        return nil, err
-    }
-    return connect.NewResponse(&kvv1.DeleteResponse{}), nil
-}
-
-// kvClient adapts the Connect client to the KVStore interface
-type kvClient struct {
-    client kvv1connect.KVServiceClient
-}
-
-func (c *kvClient) Get(ctx context.Context, key string) ([]byte, error) {
-    resp, err := c.client.Get(ctx, connect.NewRequest(&kvv1.GetRequest{Key: key}))
-    if err != nil {
-        return nil, err
-    }
-    return resp.Msg.Value, nil
-}
-
-func (c *kvClient) Put(ctx context.Context, key string, value []byte) error {
-    _, err := c.client.Put(ctx, connect.NewRequest(&kvv1.PutRequest{Key: key, Value: value}))
-    return err
-}
-
-func (c *kvClient) Delete(ctx context.Context, key string) error {
-    _, err := c.client.Delete(ctx, connect.NewRequest(&kvv1.DeleteRequest{Key: key}))
-    return err
+    // Wrap Connect client → KVStore interface
+    // ... adapter code omitted (~70 lines) ...
 }
 ```
-
-### Step 4: Use the plugin
 
 **Host side:**
 ```go
 import (
     "myapp/kv"
-    "github.com/yourorg/connect-plugin-go"
+    connectplugin "github.com/yourorg/connect-plugin-go"
 )
 
 func main() {
@@ -278,14 +199,8 @@ func main() {
 
     client.Connect(context.Background())
 
-    // Dispense the plugin
-    raw, err := client.Dispense("kv")
-    if err != nil {
-        log.Fatal(err)
-    }
-    kvStore := raw.(kv.KVStore)
-
-    // Use it
+    // Recommended: Type-safe dispensing
+    kvStore := connectplugin.MustDispenseTyped[kv.KVStore](client, "kv")
     kvStore.Put(ctx, "hello", []byte("world"))
 }
 ```
@@ -330,12 +245,10 @@ The code generator (`protoc-gen-connect-plugin`) generates the plugin implementa
 package kvv1plugin
 
 import (
-    "context"
     "net/http"
 
     "connectrpc.com/connect"
     connectplugin "github.com/yourorg/connect-plugin-go"
-    kvv1 "myapp/gen/kv/v1"
     "myapp/gen/kv/v1/kvv1connect"
 )
 
@@ -343,6 +256,13 @@ import (
 type KVServicePlugin struct{}
 
 var _ connectplugin.Plugin = (*KVServicePlugin)(nil)
+var _ connectplugin.TypedPlugin[kvv1connect.KVServiceClient] = (*KVServicePlugin)(nil)
+
+func (p *KVServicePlugin) Metadata() connectplugin.PluginMetadata {
+    return connectplugin.PluginMetadata{
+        Path: kvv1connect.KVServiceName,
+    }
+}
 
 func (p *KVServicePlugin) ConnectServer(impl any) (string, http.Handler, error) {
     server, ok := impl.(kvv1connect.KVServiceHandler)
@@ -357,21 +277,13 @@ func (p *KVServicePlugin) ConnectClient(baseURL string, httpClient connect.HTTPC
     return kvv1connect.NewKVServiceClient(httpClient, baseURL), nil
 }
 
-// Typed variant
-type TypedKVServicePlugin struct {
-    KVServicePlugin
-}
-
-func (p *TypedKVServicePlugin) TypedClient(baseURL string, httpClient connect.HTTPClient) (kvv1connect.KVServiceClient, error) {
-    raw, err := p.ConnectClient(baseURL, httpClient)
-    if err != nil {
-        return nil, err
-    }
-    return raw.(kvv1connect.KVServiceClient), nil
+// TypedClient provides compile-time type safety for client dispensing.
+func (p *KVServicePlugin) TypedClient(baseURL string, httpClient connect.HTTPClient) (kvv1connect.KVServiceClient, error) {
+    return kvv1connect.NewKVServiceClient(httpClient, baseURL), nil
 }
 ```
 
-Usage with generated plugin:
+Usage with generated plugin (using type-safe DispenseTyped):
 
 ```go
 import kvv1plugin "myapp/gen/kv/v1/kvv1plugin"
@@ -382,21 +294,19 @@ client := connectplugin.NewClient(&connectplugin.ClientConfig{
         "kv": &kvv1plugin.KVServicePlugin{},
     },
 })
+
+// Primary API: type-safe dispensing
+kvClient := connectplugin.MustDispenseTyped[kvv1connect.KVServiceClient](client, "kv")
+resp, err := kvClient.Get(ctx, connect.NewRequest(&kvv1.GetRequest{Key: "hello"}))
 ```
 
 ## Helper Functions
 
-```go
-// MustPlugin panics if the plugin is not found.
-func (c *Client) MustDispense(name string) any {
-    raw, err := c.Dispense(name)
-    if err != nil {
-        panic(err)
-    }
-    return raw
-}
+### Primary API: DispenseTyped (Recommended)
 
+```go
 // DispenseTyped returns a typed plugin client.
+// This is the PRIMARY and RECOMMENDED way to dispense plugins.
 func DispenseTyped[I any](c *Client, name string) (I, error) {
     raw, err := c.Dispense(name)
     if err != nil {
@@ -421,12 +331,40 @@ func MustDispenseTyped[I any](c *Client, name string) I {
 }
 ```
 
-Usage:
+### Secondary API: Untyped Dispense
 
 ```go
-// Type-safe dispensing
-kvStore := connectplugin.MustDispenseTyped[kv.KVStore](client, "kv")
-kvStore.Put(ctx, "key", []byte("value"))
+// Dispense returns an untyped plugin client.
+// Use DispenseTyped instead for compile-time type safety.
+func (c *Client) Dispense(name string) (any, error) {
+    plugin, ok := c.config.Plugins.Get(name)
+    if !ok {
+        return nil, fmt.Errorf("plugin %q not found", name)
+    }
+    return plugin.ConnectClient(c.baseURL, c.httpClient)
+}
+
+// MustDispense panics if the plugin is not found.
+// Use MustDispenseTyped instead for compile-time type safety.
+func (c *Client) MustDispense(name string) any {
+    raw, err := c.Dispense(name)
+    if err != nil {
+        panic(err)
+    }
+    return raw
+}
+```
+
+Usage examples:
+
+```go
+// RECOMMENDED: Type-safe dispensing with compile-time checks
+kvClient := connectplugin.MustDispenseTyped[kvv1connect.KVServiceClient](client, "kv")
+resp, err := kvClient.Get(ctx, connect.NewRequest(&kvv1.GetRequest{Key: "hello"}))
+
+// Alternative: Untyped dispensing (requires manual type assertion)
+raw, err := client.Dispense("kv")
+kvClient := raw.(kvv1connect.KVServiceClient)
 ```
 
 ## ServeConfig Extension
@@ -468,30 +406,79 @@ func Serve(cfg *ServeConfig) error {
 
 ## Plugin Versioning
 
-Support for multiple protocol versions:
+**Note for v1:** The `VersionedPlugins` pattern from go-plugin adds complexity and is confusing when combined with the single `Plugins` field. For the initial v1 release, **we will support only a single plugin version** via the `Plugins` field in `ClientConfig` and `ServeConfig`.
+
+Plugin evolution should be handled at the protobuf service level:
+- Define new service versions (e.g., `kv.v2.KVService`)
+- Register as separate plugin names (e.g., `"kv"` for v1, `"kv_v2"` for v2)
+- Or use protobuf evolution (add fields, maintain compatibility)
 
 ```go
-type ClientConfig struct {
-    // ... other fields
-
-    // VersionedPlugins maps protocol versions to plugin sets
-    // Negotiated during handshake
-    VersionedPlugins map[int]PluginSet
-}
-
-// Example
+// v1 approach: Single plugin set
 client := connectplugin.NewClient(&connectplugin.ClientConfig{
     Endpoint: "http://plugin:8080",
-    VersionedPlugins: map[int]connectplugin.PluginSet{
-        1: {
-            "kv": &kvv1plugin.KVServicePlugin{},
-        },
-        2: {
-            "kv": &kvv2plugin.KVServicePlugin{}, // Updated interface
-        },
+    Plugins: connectplugin.PluginSet{
+        "kv": &kvv1plugin.KVServicePlugin{},
     },
 })
 ```
+
+Future versions may add protocol version negotiation if needed, but v1 will keep it simple.
+
+## Limitations
+
+### 1. No Built-in Bidirectional Communication
+
+The core `Plugin` interface does **not** include a broker parameter for bidirectional RPC (plugin → host). This is intentional to keep the interface simple and focused.
+
+**Rationale:**
+- Most plugins only need unidirectional communication (host → plugin)
+- Bidirectional communication adds significant complexity
+- Can be implemented as a capability/extension when needed
+
+**Workarounds for bidirectional needs:**
+1. **Callback pattern**: Host passes callback interface to plugin during initialization
+2. **Separate connection**: Plugin opens its own Connect client back to host
+3. **Future capability system**: May be added as opt-in extension in future versions
+
+Example callback pattern:
+```go
+// Host provides callback during initialization
+type PluginCallbacks interface {
+    OnEvent(ctx context.Context, event string) error
+}
+
+// Plugin receives callbacks
+impl := &MyPlugin{
+    callbacks: hostCallbacks,
+}
+```
+
+### 2. Runtime Type Assertions on Server Side
+
+The `ConnectServer(impl any)` method requires **runtime type assertions** to verify the implementation type. This cannot be checked at compile time.
+
+**Impact:**
+- Type mismatches only discovered at runtime (when `Serve()` is called)
+- Error messages show the actual type vs expected type
+- No compile-time guarantee that impl matches the service
+
+**Mitigation:**
+- Generated plugins include clear documentation of expected types
+- Validation happens early during `Serve()` startup, not during requests
+- Error messages are descriptive (e.g., "impl must implement KVServiceHandler, got *MyStruct")
+
+**Alternative considered:** Make `Plugin` generic with implementation type, but this would complicate the interface and make `PluginSet` impossible (no `map[string]Plugin[T]` with different T values).
+
+### 3. Code Generation Strongly Recommended
+
+While hand-written plugins are possible, they require significant boilerplate:
+- ~140+ lines for a simple 3-method interface
+- Adapter code for both server (Go interface → Connect service)
+- Adapter code for client (Connect client → Go interface)
+- Easy to make mistakes in the adapter logic
+
+**Recommendation:** Always use `protoc-gen-connect-plugin` for production plugins. Hand-written plugins should be reserved for advanced use cases only.
 
 ## Design Decisions Summary
 
@@ -499,33 +486,46 @@ client := connectplugin.NewClient(&connectplugin.ClientConfig{
 **Decision:** Single `Plugin` interface instead of separate Protocol/GRPCPlugin.
 **Rationale:** Connect is the only protocol, so no need for abstraction.
 
-### 2. Server returns handler
+### 2. Metadata method for validation
+**Decision:** Add `Metadata() PluginMetadata` method returning service path.
+**Rationale:** Allows path validation without calling `ConnectServer(nil)`, which would fail type assertions. Separates validation concerns from instantiation.
+
+### 3. Server returns handler
 **Decision:** `ConnectServer` returns `(string, http.Handler, error)`.
 **Rationale:** More flexible than direct registration. Allows path customization and middleware.
 
-### 3. Any types instead of generics in base interface
+### 4. Any types instead of generics in base interface
 **Decision:** Use `any` for impl and return types.
-**Rationale:** Keeps interface simple. Typed wrappers available for type safety.
+**Rationale:** Keeps interface simple. Typed wrappers available for type safety. Trade-off: runtime type assertions on server side.
 
-### 4. No broker in Plugin interface
+### 5. DispenseTyped as primary API
+**Decision:** Make `DispenseTyped[I]` the recommended/primary way to get plugin clients.
+**Rationale:** Provides compile-time type safety. Untyped `Dispense()` still available but secondary.
+
+### 6. No broker in Plugin interface
 **Decision:** Bidirectional communication handled separately.
-**Rationale:** Cleaner separation of concerns. Capabilities are opt-in.
+**Rationale:** Cleaner separation of concerns. Capabilities are opt-in. Most plugins don't need bidirectional communication.
 
-### 5. Support both hand-written and generated
-**Decision:** Interface works for both patterns.
-**Rationale:** Simple plugins shouldn't require codegen. Generated code for convenience.
+### 7. Codegen strongly recommended
+**Decision:** Hand-written plugins supported but codegen is primary path.
+**Rationale:** Hand-written plugins require 140+ lines of boilerplate. Codegen eliminates this and prevents errors.
+
+### 8. Simplified versioning for v1
+**Decision:** Remove `VersionedPlugins` map from v1. Single `Plugins` field only.
+**Rationale:** Less confusing. Version management at protobuf/service level. Can add protocol negotiation later if needed.
 
 ## Comparison with go-plugin
 
 | Feature | go-plugin | connect-plugin |
 |---------|-----------|----------------|
 | **Interface count** | 2 (Plugin, GRPCPlugin) | 1 (Plugin) |
+| **Path validation** | ConnectServer(nil) | Metadata() method |
 | **Broker** | Required parameter | Separate capability system |
 | **Server registration** | Called on grpc.Server | Returns http.Handler |
 | **Client creation** | Receives grpc.ClientConn | Receives baseURL + httpClient |
-| **Type safety** | Interface{} returns | Optional generics |
-| **Versioning** | VersionedPlugins map | Same pattern |
-| **Codegen** | Examples show manual | Tool generates plugin wrapper |
+| **Type safety** | Interface{} returns | DispenseTyped[I]() primary |
+| **Versioning** | VersionedPlugins map | Single Plugins map (v1) |
+| **Codegen** | Examples show manual | Primary path, strongly recommended |
 
 ## Implementation Checklist
 

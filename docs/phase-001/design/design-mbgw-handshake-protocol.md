@@ -74,6 +74,10 @@ message HandshakeResponse {
 
     // Server metadata (version, etc).
     map<string, string> server_metadata = 5;
+
+    // App protocol versions supported by the server.
+    // Included in error responses to help client debugging.
+    repeated int32 server_supported_versions = 6;
 }
 
 message PluginInfo {
@@ -103,11 +107,17 @@ message Capability {
     // Capability version.
     string version = 2;
 
-    // Endpoint URL for this capability (if different from main URL).
+    // Absolute endpoint URL for this capability.
+    // MUST be a complete URL (e.g., "http://host:8080/capabilities/logger").
+    // Empty means use the main plugin endpoint.
     string endpoint = 3;
 
+    // Protocol for accessing this capability (e.g., "connect", "grpc", "http").
+    // Defaults to "connect" if not specified.
+    string protocol = 4;
+
     // Additional metadata about the capability.
-    map<string, string> metadata = 4;
+    map<string, string> metadata = 5;
 }
 ```
 
@@ -130,15 +140,13 @@ message Capability {
        │    magic_cookie_key: "CONNECT_PLUGIN",           │
        │    magic_cookie_value: "d3f40b3...",             │
        │    requested_plugins: ["kv", "auth"],            │
-       │    client_capabilities: [                        │
-       │      {type: "logger", version: "1"},             │
-       │      {type: "metrics", version: "1"}             │
-       │    ]                                             │
+       │    client_capabilities: []  // Empty for MVP     │
        │  }                                               │
        │                                                  │
        │                              3. Validate cookie  │
        │                              4. Negotiate version│
        │                              5. Filter plugins   │
+       │                              6. Validate capabilities │
        │                                                  │
        │  ◀──────────────────────────────────────────────│
        │  {                                               │
@@ -149,7 +157,7 @@ message Capability {
        │        name: "kv",                               │
        │        version: "1.0.0",                         │
        │        service_paths: ["/kv.v1.KVService/"],    │
-       │        required_capabilities: ["logger"]         │
+       │        required_capabilities: []  // Empty for MVP │
        │      },                                          │
        │      {                                           │
        │        name: "auth",                             │
@@ -157,9 +165,8 @@ message Capability {
        │        service_paths: ["/auth.v1.AuthService/"] │
        │      }                                           │
        │    ],                                            │
-       │    server_capabilities: [                        │
-       │      {type: "callback", version: "1"}            │
-       │    ]                                             │
+       │    server_capabilities: [],  // Empty for MVP    │
+       │    server_supported_versions: [1, 2, 3]          │
        │  }                                               │
        │                                                  │
        │  6. Client validates response                    │
@@ -255,7 +262,47 @@ type ServeConfig struct {
 - Mismatch returns error with helpful message
 - Client interprets as "not a plugin server"
 
+**Security Considerations:**
+- Magic cookie is transmitted over the network in handshake requests
+- This is primarily for process-based plugins (go-plugin compatibility)
+- For network-deployed plugins, consider:
+  - Making magic cookie optional (`DisableMagicCookie: true`)
+  - Using proper authentication (mTLS, JWT tokens) instead
+  - Relying on network isolation and service mesh for security
+
+**Network Deployment Recommendation:**
+For plugins deployed as network services (Kubernetes, Cloud Run), the magic cookie provides minimal value since:
+1. Service discovery already ensures correct endpoint
+2. Handshake version negotiation catches protocol mismatches
+3. Network security should rely on proper authentication mechanisms
+
+**Configuration:**
+```go
+// For network-deployed plugins, disable magic cookie
+cfg := &connectplugin.ServeConfig{
+    DisableMagicCookie: true,  // Rely on network auth instead
+    // ... use mTLS, JWT, or service mesh authentication
+}
+```
+
 ## Capability Advertisement
+
+**Status:** Deferred to post-MVP
+
+Capability advertisement and the capability broker system add significant complexity to the handshake protocol. For the MVP, we will:
+
+1. Keep the proto fields defined but unused
+2. Clients will pass empty `client_capabilities` array
+3. Servers will return empty `server_capabilities` array
+4. Plugin `required_capabilities` and `optional_capabilities` will be empty
+
+**Rationale:**
+- Core plugin functionality works without capabilities
+- Host capabilities (logging, metrics, etc.) can be provided via other means initially
+- This allows us to ship the handshake protocol sooner
+- Capability broker can be added in a future version without protocol changes
+
+**Future Design (Post-MVP):**
 
 ### Client Capabilities (Host → Plugin)
 
@@ -263,9 +310,18 @@ The host advertises capabilities it can provide to plugins:
 
 ```go
 clientCapabilities := []Capability{
-    {Type: "logger", Version: "1", Endpoint: "/capabilities/logger"},
-    {Type: "metrics", Version: "1", Endpoint: "/capabilities/metrics"},
-    {Type: "storage", Version: "1", Endpoint: "/capabilities/storage"},
+    {
+        Type:     "logger",
+        Version:  "1",
+        Endpoint: "http://host:8080/capabilities/logger",
+        Protocol: "connect",
+    },
+    {
+        Type:     "metrics",
+        Version:  "1",
+        Endpoint: "http://host:8080/capabilities/metrics",
+        Protocol: "connect",
+    },
 }
 ```
 
@@ -294,9 +350,35 @@ Plugins declare required and optional capabilities:
 }
 ```
 
-**Validation:**
-- If required capability is missing, client can warn or fail
+**Server-Side Validation:**
+The server validates that all required capabilities are available:
+
+```go
+func (s *handshakeServer) validateRequiredCapabilities(
+    plugins []*connectpluginv1.PluginInfo,
+    clientCapabilities []*connectpluginv1.Capability,
+) error {
+    available := make(map[string]bool)
+    for _, cap := range clientCapabilities {
+        available[cap.Type] = true
+    }
+
+    for _, plugin := range plugins {
+        for _, required := range plugin.RequiredCapabilities {
+            if !available[required] {
+                return fmt.Errorf("plugin %q requires capability %q which is not provided by client",
+                    plugin.Name, required)
+            }
+        }
+    }
+    return nil
+}
+```
+
+**Error Handling:**
+- If required capability is missing, handshake fails with `FailedPrecondition`
 - Optional capabilities are best-effort
+- Client receives clear error message indicating which capability is missing
 
 ## Handshake Endpoint
 
@@ -308,12 +390,53 @@ Content-Type: application/json
 Connect-Protocol-Version: 1
 ```
 
+### Well-Known Discovery Endpoint
+
+For forward compatibility and protocol version negotiation, servers SHOULD expose a discovery endpoint at:
+
+```
+GET /.well-known/connectplugin
+Content-Type: application/json
+```
+
+**Response:**
+```json
+{
+  "protocol_versions": [1],
+  "handshake_endpoint": "/connectplugin.v1.HandshakeService/Handshake",
+  "health_endpoint": "/connectplugin.health.v1.HealthService/Check",
+  "capabilities_supported": true
+}
+```
+
+**Purpose:**
+- Enables clients to discover handshake endpoint location
+- Allows protocol version detection before handshake
+- Provides forward compatibility for future protocol versions (v2, v3)
+- Supports HTTP/REST clients that don't know Connect protocol
+
+**Client Usage:**
+```go
+// Optionally check well-known endpoint first
+discovery, err := client.Get(baseURL + "/.well-known/connectplugin")
+if err == nil {
+    // Use discovered endpoints
+    handshakeURL := discovery.HandshakeEndpoint
+} else {
+    // Fall back to default
+    handshakeURL = "/connectplugin.v1.HandshakeService/Handshake"
+}
+```
+
 **Registration:**
 ```go
 func Serve(cfg *ServeConfig) error {
     mux := http.NewServeMux()
 
-    // Register handshake service first
+    // Register well-known discovery endpoint
+    mux.HandleFunc("/.well-known/connectplugin", handleWellKnownDiscovery)
+
+    // Register handshake service
     handshakeServer := newHandshakeServer(cfg)
     path, handler := connectpluginv1connect.NewHandshakeServiceHandler(handshakeServer)
     mux.Handle(path, handler)
@@ -324,6 +447,16 @@ func Serve(cfg *ServeConfig) error {
     }
 
     // Serve
+}
+
+func handleWellKnownDiscovery(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]any{
+        "protocol_versions":      []int{1},
+        "handshake_endpoint":     "/connectplugin.v1.HandshakeService/Handshake",
+        "health_endpoint":        "/connectplugin.health.v1.HealthService/Check",
+        "capabilities_supported": true,
+    })
 }
 ```
 
@@ -416,17 +549,23 @@ func (s *handshakeServer) Handshake(ctx context.Context,
     negotiatedVersion := negotiateVersion(req.Msg.AppProtocolVersions, s.cfg.SupportedVersions)
     if negotiatedVersion == 0 {
         return nil, connect.NewError(connect.CodeFailedPrecondition,
-            fmt.Errorf("no compatible app protocol version"))
+            fmt.Errorf("no compatible app protocol version - server supports: %v", s.cfg.SupportedVersions))
     }
 
     // Build plugin info
     plugins := s.buildPluginInfo(req.Msg.RequestedPlugins, negotiatedVersion)
 
+    // Validate required capabilities
+    if err := s.validateRequiredCapabilities(plugins, req.Msg.ClientCapabilities); err != nil {
+        return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+    }
+
     resp := &connectpluginv1.HandshakeResponse{
-        CoreProtocolVersion: 1,
-        AppProtocolVersion:  negotiatedVersion,
-        Plugins:             plugins,
-        ServerCapabilities:  s.cfg.ServerCapabilities,
+        CoreProtocolVersion:      1,
+        AppProtocolVersion:       negotiatedVersion,
+        Plugins:                  plugins,
+        ServerCapabilities:       s.cfg.ServerCapabilities,
+        ServerSupportedVersions:  int32Slice(s.cfg.SupportedVersions),
         ServerMetadata: map[string]string{
             "server_version": Version,
             "app_name":       s.cfg.AppName,
@@ -434,6 +573,29 @@ func (s *handshakeServer) Handshake(ctx context.Context,
     }
 
     return connect.NewResponse(resp), nil
+}
+
+func (s *handshakeServer) validateRequiredCapabilities(
+    plugins []*connectpluginv1.PluginInfo,
+    clientCapabilities []*connectpluginv1.Capability,
+) error {
+    // Build set of available capability types
+    available := make(map[string]bool)
+    for _, cap := range clientCapabilities {
+        available[cap.Type] = true
+    }
+
+    // Check each plugin's required capabilities
+    for _, plugin := range plugins {
+        for _, required := range plugin.RequiredCapabilities {
+            if !available[required] {
+                return fmt.Errorf("plugin %q requires capability %q which is not provided by client",
+                    plugin.Name, required)
+            }
+        }
+    }
+
+    return nil
 }
 
 func negotiateVersion(clientVersions []int32, serverVersions []int) int32 {
@@ -461,19 +623,38 @@ func negotiateVersion(clientVersions []int32, serverVersions []int) int32 {
 | Invalid magic cookie | `InvalidArgument` | Not a plugin server | Fail with clear message |
 | Core version mismatch | `InvalidArgument` | Incompatible core protocol | Fail - no recovery |
 | No compatible app version | `FailedPrecondition` | No compatible plugin version | Fail or try fallback endpoint |
+| Required capability missing | `FailedPrecondition` | Plugin requires unavailable capability | Fail with clear message |
 | Requested plugin not found | None (in response) | Plugin not available | Fail or continue without |
 | Network error | `Unavailable` | Connection failed | Retry with backoff |
 
 ### Error Messages
 
+Error responses should include actionable information:
+
 ```go
+// Server error response includes supported versions
+if negotiatedVersion == 0 {
+    resp := &connectpluginv1.HandshakeResponse{
+        ServerSupportedVersions: int32Slice(s.cfg.SupportedVersions),
+    }
+    // Include response in error metadata if Connect supports it
+    return nil, connect.NewError(connect.CodeFailedPrecondition,
+        fmt.Errorf("no compatible app protocol version - client requested: %v, server supports: %v",
+            req.Msg.AppProtocolVersions, s.cfg.SupportedVersions))
+}
+
+// Client error handling with detailed messages
 switch {
 case isMagicCookieError(err):
     return fmt.Errorf("endpoint %s is not a connect-plugin server (magic cookie mismatch)", url)
 case isCoreVersionError(err):
     return fmt.Errorf("incompatible plugin protocol version - client: %d, server: %d", clientV, serverV)
 case isAppVersionError(err):
-    return fmt.Errorf("no compatible plugin version - client supports: %v, server supports: %v", clientVersions, serverVersions)
+    // Parse server versions from error message or response metadata
+    return fmt.Errorf("no compatible plugin version - client supports: %v, server supports: %v",
+        clientVersions, parseServerVersions(err))
+case isCapabilityError(err):
+    return fmt.Errorf("capability requirement not met: %w", err)
 default:
     return fmt.Errorf("handshake failed: %w", err)
 }
@@ -549,6 +730,71 @@ func (c *Client) Connect(ctx context.Context) error {
 - Less robust (errors discovered later)
 - No capability discovery
 
+## Forward Compatibility Strategy
+
+### Protocol Version 2 Support
+
+When protocol v2 is introduced, the well-known discovery endpoint enables smooth migration:
+
+```go
+// Client checks protocol versions before handshake
+discovery, err := http.Get(baseURL + "/.well-known/connectplugin")
+if err != nil {
+    // Server doesn't support discovery - assume v1
+    return performV1Handshake(ctx)
+}
+
+var info WellKnownInfo
+json.NewDecoder(discovery.Body).Decode(&info)
+
+// Choose highest mutually supported version
+if contains(info.ProtocolVersions, 2) && c.supportsV2 {
+    return performV2Handshake(ctx)
+}
+
+return performV1Handshake(ctx)
+```
+
+### Versioning Strategy
+
+**Core Protocol Version:**
+- Increments for breaking changes to handshake protocol itself
+- Version 1: Current Connect-based handshake
+- Version 2: Future (e.g., different transport, message format)
+
+**App Protocol Version:**
+- Increments for plugin interface changes
+- Negotiated within a core protocol version
+- Both client and server support multiple app versions
+
+**Well-Known Discovery:**
+- Enables version detection before handshake
+- Lists all supported core protocol versions
+- Provides endpoint URLs for each version
+
+### Migration Path
+
+**Adding Protocol v2:**
+1. Server implements both v1 and v2 handshake endpoints
+2. Well-known endpoint lists both versions
+3. Clients try v2, fall back to v1
+4. Gradually deprecate v1 over time
+
+**Example Multi-Version Server:**
+```go
+mux.Handle("/connectplugin.v1.HandshakeService/Handshake", v1Handler)
+mux.Handle("/connectplugin.v2.HandshakeService/Handshake", v2Handler)
+mux.HandleFunc("/.well-known/connectplugin", func(w http.ResponseWriter, r *http.Request) {
+    json.NewEncoder(w).Encode(map[string]any{
+        "protocol_versions": []int{1, 2},
+        "handshake_endpoints": map[string]string{
+            "v1": "/connectplugin.v1.HandshakeService/Handshake",
+            "v2": "/connectplugin.v2.HandshakeService/Handshake",
+        },
+    })
+})
+```
+
 ## Comparison with go-plugin
 
 | Aspect | go-plugin | connect-plugin |
@@ -563,15 +809,25 @@ func (c *Client) Connect(ctx context.Context) error {
 
 ## Implementation Checklist
 
+### MVP (Phase 1)
 - [x] Handshake proto definition
 - [x] Version negotiation algorithm
-- [x] Magic cookie validation
-- [x] Capability advertisement format
+- [x] Magic cookie validation (with disable option)
+- [x] Well-known discovery endpoint
 - [x] Client handshake logic
 - [x] Server handshake logic
-- [x] Error handling and messages
+- [x] Enhanced error messages with server versions
 - [x] Handshake caching strategy
 - [x] Optional handshake mode
+- [x] Capability validation (server-side)
+- [x] Forward compatibility strategy
+
+### Post-MVP (Phase 2)
+- [ ] Capability broker implementation
+- [ ] Client capability advertisement
+- [ ] Server capability advertisement
+- [ ] Plugin capability requirements
+- [ ] Capability grant system
 
 ## Next Steps
 
@@ -579,6 +835,70 @@ func (c *Client) Connect(ctx context.Context) error {
 2. Generate Connect service stubs
 3. Implement client handshake in `client.go`
 4. Implement server handshake in `serve.go`
-5. Add unit tests for version negotiation
-6. Design client configuration (KOR-qjhn)
-7. Design server configuration (KOR-koba)
+5. Add well-known discovery endpoint handler
+6. Add unit tests for version negotiation
+7. Add unit tests for capability validation
+8. Design client configuration (KOR-qjhn)
+9. Design server configuration (KOR-koba)
+
+## Review Feedback Resolution
+
+This document has been updated to address critical review feedback:
+
+### 1. Version Negotiation Error Details
+**Issue:** When version negotiation fails, client receives no information about server's supported versions.
+
+**Resolution:**
+- Added `server_supported_versions` field to `HandshakeResponse`
+- Server always populates this field, even in error cases
+- Enhanced error messages to include both client and server version lists
+- Example: "no compatible app protocol version - client requested: [3, 4], server supports: [1, 2]"
+
+### 2. Capability Endpoint Ambiguity
+**Issue:** `Capability.endpoint` field was ambiguous - unclear if relative or absolute URL.
+
+**Resolution:**
+- Clarified that `endpoint` MUST be an absolute URL
+- Added `protocol` field to specify access protocol (e.g., "connect", "grpc", "http")
+- Updated documentation with examples showing complete URLs
+- Empty endpoint means use main plugin endpoint
+
+### 3. Required Capabilities Validation
+**Issue:** Required capabilities were only validated client-side, allowing misconfiguration.
+
+**Resolution:**
+- Added server-side validation in handshake handler
+- `validateRequiredCapabilities()` function checks all plugin requirements
+- Returns `FailedPrecondition` error if required capability missing
+- Error message identifies specific plugin and missing capability
+
+### 4. Forward Compatibility Strategy
+**Issue:** No clear path for introducing protocol v2 in the future.
+
+**Resolution:**
+- Added well-known discovery endpoint at `/.well-known/connectplugin`
+- Endpoint returns protocol versions, handshake endpoints, capabilities
+- Enables clients to detect protocol version before handshake
+- Documents migration path for multi-version servers
+- Provides clear versioning strategy for core vs app protocol
+
+### 5. Magic Cookie for Network Use
+**Issue:** Magic cookie questionable for network-deployed plugins (K8s, Cloud Run).
+
+**Resolution:**
+- Added security considerations section
+- Documented that magic cookie provides minimal value for network deployments
+- Added `DisableMagicCookie` configuration option
+- Recommends proper authentication (mTLS, JWT) for network deployments
+- Clarifies magic cookie is primarily for process-based plugins
+
+### 6. Capabilities Deferred to Post-MVP
+**Decision:** Capability system adds significant complexity without immediate value.
+
+**Resolution:**
+- Marked capability advertisement as "Deferred to post-MVP"
+- Proto fields remain defined for forward compatibility
+- MVP uses empty capability arrays
+- Clear documentation of future capability design
+- Allows shipping handshake protocol sooner
+- Capability broker can be added in future version without breaking changes

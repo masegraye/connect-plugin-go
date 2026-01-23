@@ -1,12 +1,36 @@
 # Design: fx Integration Layer
 
 **Issue:** KOR-ntsm
-**Status:** Complete
+**Status:** In Progress (Simplified)
 **Dependencies:** KOR-cldj, KOR-gfuh
 
 ## Overview
 
-The fx integration layer wraps connect-plugin with uber-go/fx dependency injection, making plugins behave like any other injectable dependency. This is a separate optional layer on top of core connect-plugin - you can use connect-plugin without fx, but fx integration provides ergonomic DI and makes testing much simpler.
+The fx integration layer wraps connect-plugin with uber-go/fx dependency injection, making plugins behave like any other injectable dependency. This is a separate optional layer on top of core connect-plugin - you can use connect-plugin without fx, but fx integration provides ergonomic DI for applications already using fx.
+
+**Important:** This is a lightweight wrapper for fx-based applications. For simple use cases or testing, prefer direct mocking via fx.Provide instead of complex test harnesses.
+
+## Summary of Simplifications (Post-Review)
+
+Based on review feedback, this design has been simplified:
+
+**KEPT (Essential):**
+- `PluginModule()` - Client lifecycle management with fx hooks
+- `ProvideTypedPlugin[I]()` - Type-safe interface dispensing
+- `ModuleBuilder` - Fluent API for common configuration patterns
+
+**REMOVED (Unnecessary complexity):**
+- `LocalPluginHarness` - **Too brittle and complex**. Users should inject mocks directly via `fx.Provide` for testing.
+- Multi-plugin test harnesses - Compose simple primitives manually if truly needed.
+- Specialized capability testing helpers - Use real or mock handlers directly.
+
+**DEFERRED (Needs design fixes):**
+- `PluginServerModule()` - Has `stopCh` lifecycle bug and coordination issues. Use vanilla `connectplugin.Serve()` with `fx.Populate` pattern instead.
+
+**NEW:**
+- "When NOT to use fx integration" guidance
+- Direct mocking pattern as primary testing approach
+- Simplified mental model: fx is for client-side wiring only
 
 ## Design Goals
 
@@ -14,18 +38,32 @@ The fx integration layer wraps connect-plugin with uber-go/fx dependency injecti
 2. **Ergonomic**: Plugins as simple fx.Provide sources
 3. **Lifecycle integration**: Plugin Connect/Close map to fx OnStart/OnStop
 4. **Type-safe**: Provide specific interfaces, not raw Plugin
-5. **Test-friendly**: Easy to wire up test scenarios with fx.Module
+5. **Test-friendly**: Prefer direct mocking over complex machinery
+
+## When NOT to Use fx Integration
+
+**Skip fx integration if:**
+- You're writing a simple CLI tool or single-purpose binary
+- Your application doesn't already use fx
+- You're writing unit tests (prefer direct mocking instead)
+- You need fine-grained control over plugin lifecycle
+- You only have 1-2 dependencies total
+
+**Use fx integration when:**
+- Your application already uses fx for DI
+- You have many dependencies and want automatic wiring
+- You want declarative lifecycle management (OnStart/OnStop)
+- You're building a complex service with multiple plugins
 
 ## Package Structure
 
 ```
 connectpluginfx/
-  module.go         - PluginModule() and helpers
-  client.go         - Client provider
-  server.go         - Server provider
-  typed.go          - Type-safe dispensing
-  testing.go        - Test helpers
+  module.go         - PluginModule() and ModuleBuilder
+  typed.go          - ProvideTypedPlugin[I]() for type-safe dispensing
 ```
+
+Note: Server-side fx integration is deferred. Use vanilla `connectplugin.Serve()` for serving plugins.
 
 ## Core API
 
@@ -91,126 +129,55 @@ fx.New(
 ).Run()
 ```
 
-### PluginServerModule
+### PluginServerModule (DEFERRED)
 
-Wraps a plugin server as an fx module:
+Server-side fx integration is deferred due to lifecycle complexity:
+- `stopCh` needs to be created and managed properly
+- `connectplugin.Serve()` is blocking, making goroutine coordination tricky
+- Most plugin servers are simple binaries that don't need fx
+
+**Current recommendation:** Use vanilla `connectplugin.Serve()` in `main()`:
 
 ```go
-// PluginServerModule creates an fx module that serves plugins.
-func PluginServerModule(cfg *connectplugin.ServeConfig) fx.Option {
-    return fx.Module("connect-plugin-server",
-        fx.Invoke(func(lc fx.Lifecycle) error {
-            lc.Append(fx.Hook{
-                OnStart: func(ctx context.Context) error {
-                    // Start serving in background
-                    stopCh := make(chan struct{})
-                    go func() {
-                        connectplugin.Serve(cfg)
-                    }()
-
-                    // Wait for server ready
-                    return waitForServerReady(cfg.Addr, 5*time.Second)
-                },
-                OnStop: func(ctx context.Context) error {
-                    // Trigger graceful shutdown
-                    close(cfg.StopCh)
-                    return nil
-                },
-            })
-            return nil
-        }),
-    )
+func main() {
+    connectplugin.Serve(&connectplugin.ServeConfig{
+        Addr:    ":8080",
+        Plugins: pluginSet,
+        Impls:   impls,
+    })
 }
 ```
 
-## Test Harness Patterns
-
-### Pattern 1: In-Process Plugin Testing
+If you need fx for plugin implementation dependencies, compose manually:
 
 ```go
-func TestKVPlugin(t *testing.T) {
-    app := fxtest.New(t,
-        // Serve plugin in background
-        connectpluginfx.PluginServerModule(&connectplugin.ServeConfig{
-            Addr: "localhost:18080",
-            Plugins: connectplugin.PluginSet{
-                "kv": &kvplugin.KVServicePlugin{},
-            },
-            Impls: map[string]any{
-                "kv": &testKVStore{data: make(map[string][]byte)},
-            },
-        }),
-
-        // Client to plugin
-        connectpluginfx.PluginModule(&connectplugin.ClientConfig{
-            Endpoint: "http://localhost:18080",
-            Plugins: connectplugin.PluginSet{
-                "kv": &kvplugin.KVServicePlugin{},
-            },
-        }),
-
-        // Provide typed interface
-        connectpluginfx.ProvideTypedPlugin[kv.KVStore]("kv"),
-
-        // Test code
-        fx.Invoke(func(store kv.KVStore) {
-            err := store.Put(context.Background(), "test", []byte("value"))
-            require.NoError(t, err)
-
-            val, err := store.Get(context.Background(), "test")
-            require.NoError(t, err)
-            assert.Equal(t, []byte("value"), val)
-        }),
+func main() {
+    var impl kv.KVStore
+    app := fx.New(
+        fx.Provide(NewLogger),
+        fx.Provide(NewDatabase),
+        fx.Provide(NewKVStoreImpl), // Receives logger, db
+        fx.Populate(&impl),
     )
 
-    app.RequireStart()
-    defer app.RequireStop()
+    if err := app.Start(context.Background()); err != nil {
+        log.Fatal(err)
+    }
+
+    // Serve plugin with fx-created implementation
+    connectplugin.Serve(&connectplugin.ServeConfig{
+        Addr:    ":8080",
+        Plugins: connectplugin.PluginSet{"kv": &kvplugin.KVServicePlugin{}},
+        Impls:   map[string]any{"kv": impl},
+    })
 }
 ```
 
-### Pattern 2: Multi-Plugin Test Scenario
+## Testing Patterns
 
-```go
-func TestPluginComposition(t *testing.T) {
-    app := fxtest.New(t,
-        // Logger plugin server
-        connectpluginfx.PluginServerModule(&connectplugin.ServeConfig{
-            Addr:    "localhost:18081",
-            Plugins: connectplugin.PluginSet{"logger": &loggerPlugin{}},
-            Impls:   map[string]any{"logger": &testLogger{}},
-        }),
+### Recommended: Direct Mocking with fx.Provide
 
-        // App plugin server (uses logger)
-        connectpluginfx.PluginServerModule(&connectplugin.ServeConfig{
-            Addr:    "localhost:18082",
-            Plugins: connectplugin.PluginSet{"app": &appPlugin{}},
-            Impls:   map[string]any{"app": &testApp{}},
-            HostCapabilities: map[string]connectplugin.CapabilityHandler{
-                "service_registry": testServiceRegistry,
-            },
-        }),
-
-        // Client to app plugin
-        connectpluginfx.PluginModule(&connectplugin.ClientConfig{
-            Endpoint: "http://localhost:18082",
-            Plugins:  connectplugin.PluginSet{"app": &appPlugin{}},
-        }),
-
-        connectpluginfx.ProvideTypedPlugin[app.Service]("app"),
-
-        fx.Invoke(func(svc app.Service) {
-            // App plugin internally uses logger plugin via service registry
-            result, err := svc.DoWork(context.Background(), &WorkRequest{})
-            require.NoError(t, err)
-        }),
-    )
-
-    app.RequireStart()
-    defer app.RequireStop()
-}
-```
-
-### Pattern 3: Mock Plugin for Testing
+For unit testing, skip the plugin layer entirely and inject mocks directly:
 
 ```go
 func TestApplicationWithMockPlugin(t *testing.T) {
@@ -219,12 +186,12 @@ func TestApplicationWithMockPlugin(t *testing.T) {
     }
 
     app := fxtest.New(t,
-        // Provide mock directly (no plugin layer)
+        // Provide mock directly - no plugin machinery needed
         fx.Provide(func() kv.KVStore {
             return mockStore
         }),
 
-        // Application code
+        // Application code (receives kv.KVStore interface)
         fx.Provide(NewApplication),
 
         fx.Invoke(func(app *Application) {
@@ -239,118 +206,107 @@ func TestApplicationWithMockPlugin(t *testing.T) {
 }
 ```
 
-**Key advantage**: Application code doesn't know if it's using real plugin or mock.
+**Key advantages:**
+- Application code doesn't know if it's using real plugin or mock
+- No network overhead, port allocation, or process coordination
+- Fast, simple, and easy to debug
+- Recommended for 95% of test cases
 
-## Advanced Patterns
+### Integration Testing: Real Plugin with Test Server
 
-### Plugin with fx Dependencies
-
-Plugin implementation can have fx-injected dependencies:
+For testing the actual plugin protocol (rare), use vanilla connect-plugin test helpers:
 
 ```go
-// Plugin implementation with dependencies
-type kvStoreImpl struct {
-    logger *zap.Logger
-    db     *sql.DB
+func TestRealPluginProtocol(t *testing.T) {
+    // Start plugin server manually
+    stopCh := make(chan struct{})
+    go func() {
+        connectplugin.Serve(&connectplugin.ServeConfig{
+            Addr: "localhost:18080",
+            Plugins: connectplugin.PluginSet{
+                "kv": &kvplugin.KVServicePlugin{},
+            },
+            Impls: map[string]any{
+                "kv": &testKVStore{},
+            },
+            StopCh: stopCh,
+        })
+    }()
+    defer close(stopCh)
+
+    time.Sleep(100 * time.Millisecond) // Wait for server
+
+    // Use fx for client side only
+    app := fxtest.New(t,
+        connectpluginfx.PluginModule(&connectplugin.ClientConfig{
+            Endpoint: "http://localhost:18080",
+            Plugins: connectplugin.PluginSet{
+                "kv": &kvplugin.KVServicePlugin{},
+            },
+        }),
+        connectpluginfx.ProvideTypedPlugin[kv.KVStore]("kv"),
+
+        fx.Invoke(func(store kv.KVStore) {
+            err := store.Put(context.Background(), "test", []byte("value"))
+            require.NoError(t, err)
+        }),
+    )
+
+    app.RequireStart()
+    defer app.RequireStop()
 }
+```
 
-func NewKVStore(logger *zap.Logger, db *sql.DB) kv.KVStore {
-    return &kvStoreImpl{logger: logger, db: db}
-}
+**When to use this pattern:**
+- Testing serialization/deserialization edge cases
+- Testing plugin handshake or versioning
+- Testing error handling across the wire
+- Integration tests in CI/CD pipelines
 
-// fx app
-fx.New(
-    fx.Provide(zap.NewProduction),
-    fx.Provide(NewDatabase),
-    fx.Provide(NewKVStore), // Receives logger and db via fx
+**Note:** Avoid complex test harnesses like `LocalPluginHarness` - they're brittle and add unnecessary complexity. Prefer composition of simple primitives.
 
-    connectpluginfx.PluginServerModule(&connectplugin.ServeConfig{
+## Advanced Pattern: Plugin Implementation with fx Dependencies
+
+If your plugin implementation needs dependencies (logger, database, etc.), use fx to build the implementation, then pass it to vanilla `Serve()`:
+
+```go
+func main() {
+    var impl kv.KVStore
+
+    app := fx.New(
+        // Dependencies
+        fx.Provide(NewLogger),
+        fx.Provide(NewDatabase),
+        fx.Provide(NewKVStoreImpl), // Receives logger, db via fx
+
+        // Extract implementation
+        fx.Populate(&impl),
+    )
+
+    ctx := context.Background()
+    if err := app.Start(ctx); err != nil {
+        log.Fatal(err)
+    }
+    defer app.Stop(ctx)
+
+    // Serve plugin with fx-created implementation
+    connectplugin.Serve(&connectplugin.ServeConfig{
         Addr: ":8080",
         Plugins: connectplugin.PluginSet{
             "kv": &kvplugin.KVServicePlugin{},
         },
-    }),
-
-    // Populate Impls from fx container
-    fx.Invoke(func(lc fx.Lifecycle, impl kv.KVStore) {
-        // Bind implementation to server config
-        // (This is a bit clunky - could be improved)
-    }),
-)
-```
-
-### PluginSet from fx Container
-
-Collect multiple plugin implementations from fx:
-
-```go
-// Tag interface implementations
-fx.Provide(
-    fx.Annotate(
-        NewKVStore,
-        fx.ResultTags(`name:"kv"`),
-    ),
-    fx.Annotate(
-        NewAuthService,
-        fx.ResultTags(`name:"auth"`),
-    ),
-)
-
-// Collect into Impls map
-type PluginImpls struct {
-    fx.In
-    KV   kv.KVStore       `name:"kv"`
-    Auth auth.AuthService `name:"auth"`
-}
-
-fx.Invoke(func(impls PluginImpls) {
-    connectplugin.Serve(&connectplugin.ServeConfig{
-        Addr:    ":8080",
-        Plugins: pluginSet,
         Impls: map[string]any{
-            "kv":   impls.KV,
-            "auth": impls.Auth,
+            "kv": impl,
         },
     })
-})
+}
 ```
 
-### Host Capabilities from fx
+This is simpler than trying to integrate `Serve()` into fx lifecycle.
 
-Expose fx-managed services as host capabilities:
+## Module Builder API
 
-```go
-fx.New(
-    // Host services
-    fx.Provide(NewVaultClient),
-    fx.Provide(NewLogger),
-
-    // Wrap as capabilities
-    fx.Provide(func(vault *VaultClient) connectplugin.CapabilityHandler {
-        return &SecretsCapability{vault: vault}
-    }),
-
-    // Collect capabilities
-    type HostCaps struct {
-        fx.In
-        Secrets connectplugin.CapabilityHandler `name:"secrets"`
-    }
-
-    // Serve with capabilities
-    connectpluginfx.PluginServerModule(&connectplugin.ServeConfig{
-        Addr:    ":8080",
-        Plugins: pluginSet,
-        Impls:   impls,
-        HostCapabilities: map[string]connectplugin.CapabilityHandler{
-            "secrets": hostCaps.Secrets,
-        },
-    }),
-)
-```
-
-## Simplified API: Module Builder
-
-For common cases, provide a builder:
+For ergonomic plugin client configuration:
 
 ```go
 // ModuleBuilder fluent API
@@ -421,193 +377,10 @@ fx.New(
 ).Run()
 ```
 
-## Test Harness: LocalPluginHarness
 
-Helper for in-process plugin testing:
+## Production Usage Example
 
-```go
-// LocalPluginHarness runs plugin client and server in same process
-type LocalPluginHarness struct {
-    addr    string
-    plugins connectplugin.PluginSet
-    impls   map[string]any
-}
-
-func NewLocalPluginHarness(plugins connectplugin.PluginSet, impls map[string]any) *LocalPluginHarness {
-    return &LocalPluginHarness{
-        addr:    "localhost:0", // Random port
-        plugins: plugins,
-        impls:   impls,
-    }
-}
-
-func (h *LocalPluginHarness) Module() fx.Option {
-    return fx.Options(
-        // Server module
-        fx.Invoke(func(lc fx.Lifecycle) error {
-            stopCh := make(chan struct{})
-            lc.Append(fx.Hook{
-                OnStart: func(ctx context.Context) error {
-                    listener, err := net.Listen("tcp", h.addr)
-                    if err != nil {
-                        return err
-                    }
-                    h.addr = listener.Addr().String()
-                    listener.Close()
-
-                    go connectplugin.Serve(&connectplugin.ServeConfig{
-                        Addr:    h.addr,
-                        Plugins: h.plugins,
-                        Impls:   h.impls,
-                        StopCh:  stopCh,
-                    })
-
-                    return waitForServerReady("http://"+h.addr, 5*time.Second)
-                },
-                OnStop: func(ctx context.Context) error {
-                    close(stopCh)
-                    return nil
-                },
-            })
-            return nil
-        }),
-
-        // Client module
-        fx.Provide(func(lc fx.Lifecycle) (*connectplugin.Client, error) {
-            client, err := connectplugin.NewClient(&connectplugin.ClientConfig{
-                Endpoint:    "http://" + h.addr,
-                Plugins:     h.plugins,
-                LazyConnect: false, // Eager for testing
-            })
-            if err != nil {
-                return nil, err
-            }
-
-            lc.Append(fx.Hook{
-                OnStart: func(ctx context.Context) error {
-                    return client.Connect(ctx)
-                },
-                OnStop: func(ctx context.Context) error {
-                    return client.Close()
-                },
-            })
-
-            return client, nil
-        }),
-    )
-}
-```
-
-**Usage in tests:**
-
-```go
-func TestWithHarness(t *testing.T) {
-    harness := connectpluginfx.NewLocalPluginHarness(
-        connectplugin.PluginSet{
-            "kv": &kvplugin.KVServicePlugin{},
-        },
-        map[string]any{
-            "kv": &testKVStore{data: make(map[string][]byte)},
-        },
-    )
-
-    var store kv.KVStore
-
-    app := fxtest.New(t,
-        harness.Module(),
-        connectpluginfx.ProvideTypedPlugin[kv.KVStore]("kv"),
-        fx.Populate(&store),
-    )
-
-    app.RequireStart()
-    defer app.RequireStop()
-
-    // Use store
-    err := store.Put(context.Background(), "key", []byte("value"))
-    require.NoError(t, err)
-}
-```
-
-## Test Harness: Capability Testing
-
-For testing plugins that require capabilities:
-
-```go
-func TestPluginWithCapabilities(t *testing.T) {
-    // Mock secrets capability
-    secretsHandler := &mockSecretsHandler{
-        secrets: map[string]string{
-            "database/password": "test-password",
-        },
-    }
-
-    harness := connectpluginfx.NewLocalPluginHarness(
-        connectplugin.PluginSet{
-            "database": &databaseplugin.DatabaseServicePlugin{},
-        },
-        map[string]any{
-            "database": &testDatabaseService{},
-        },
-    ).WithCapability("secrets", secretsHandler)
-
-    var dbSvc database.Service
-
-    app := fxtest.New(t,
-        harness.Module(),
-        connectpluginfx.ProvideTypedPlugin[database.Service]("database"),
-        fx.Populate(&dbSvc),
-    )
-
-    app.RequireStart()
-    defer app.RequireStop()
-
-    // Plugin internally requested and used secrets capability
-    assert.True(t, secretsHandler.WasCalled())
-}
-```
-
-## Test Harness: Multi-Plugin Composition
-
-For testing plugin-to-plugin communication:
-
-```go
-func TestPluginToPlugin(t *testing.T) {
-    // Service registry for plugin-to-plugin discovery
-    registry := connectplugin.NewServiceRegistry()
-
-    // Logger plugin
-    loggerHarness := connectpluginfx.NewLocalPluginHarness(
-        connectplugin.PluginSet{"logger": &loggerPlugin{}},
-        map[string]any{"logger": &testLogger{}},
-    ).WithServiceRegistry(registry)
-
-    // App plugin (needs logger)
-    appHarness := connectpluginfx.NewLocalPluginHarness(
-        connectplugin.PluginSet{"app": &appPlugin{}},
-        map[string]any{"app": &testApp{}},
-    ).WithServiceRegistry(registry)
-
-    var appSvc app.Service
-
-    app := fxtest.New(t,
-        loggerHarness.Module(),
-        appHarness.Module(),
-        connectpluginfx.ProvideTypedPlugin[app.Service]("app"),
-        fx.Populate(&appSvc),
-    )
-
-    app.RequireStart()
-    defer app.RequireStop()
-
-    // App plugin discovers and uses logger plugin via registry
-    err := appSvc.DoWork(context.Background(), &WorkRequest{})
-    require.NoError(t, err)
-}
-```
-
-## Integration with Real Application
-
-Non-test usage - production app with fx and plugins:
+Real application using fx with multiple plugin clients:
 
 ```go
 func main() {
@@ -708,19 +481,32 @@ func main() {
 
 ## Implementation Checklist
 
-- [x] PluginModule() for client integration
-- [x] PluginServerModule() for server integration
-- [x] ProvideTypedPlugin() for type-safe dispensing
-- [x] LocalPluginHarness for in-process testing
-- [x] Capability testing support
-- [x] Multi-plugin composition testing
-- [x] Module builder fluent API
-- [x] Production app example
-- [x] Comparison with/without fx
+### Core (Essential)
+- [ ] PluginModule() for client integration
+- [ ] ProvideTypedPlugin[I]() for type-safe dispensing
+- [ ] ModuleBuilder fluent API
+- [ ] Lifecycle management (OnStart/OnStop hooks)
+
+### Documentation
+- [ ] When NOT to use fx integration section
+- [ ] Direct mocking pattern examples
+- [ ] Production app example
+- [ ] Migration guide from vanilla usage
+
+### Deferred
+- [ ] PluginServerModule() - needs lifecycle design review
+  - Issue: stopCh coordination with fx lifecycle
+  - Issue: blocking Serve() call in goroutine
+  - Workaround: Use vanilla Serve() with fx.Populate pattern
+
+### Removed
+- ~~LocalPluginHarness~~ - Too complex and brittle. Use direct mocking instead.
+- ~~Multi-plugin test harness~~ - Compose simple primitives manually if needed.
+- ~~Capability test helpers~~ - Test with real/mock capability handlers directly.
 
 ## Next Steps
 
-1. Implement connectpluginfx package
-2. Write tests using LocalPluginHarness
-3. Use fx harness to test core implementation
-4. Document testing patterns in getting started guide
+1. Implement core connectpluginfx package (PluginModule, ProvideTypedPlugin, ModuleBuilder)
+2. Write examples showing direct mocking pattern
+3. Document "when NOT to use fx" prominently
+4. Defer server-side integration until lifecycle issues resolved
