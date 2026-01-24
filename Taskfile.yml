@@ -9,6 +9,27 @@ tasks:
     cmds:
       - task --list
 
+  install-deps:
+    desc: Install required build dependencies
+    cmds:
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+      - go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+    status:
+      - which protoc-gen-go
+      - which protoc-gen-connect-go
+
+  proto:
+    desc: Generate protobuf code for examples
+    deps: [install-deps]
+    cmds:
+      - mkdir -p examples/kv/gen/kv/v1
+      - protoc --proto_path=examples/kv/proto
+          --go_out=examples/kv/gen
+          --go_opt=paths=source_relative
+          --connect-go_out=examples/kv/gen
+          --connect-go_opt=paths=source_relative
+          examples/kv/proto/kv.proto
+
   tidy:
     desc: Run go mod tidy
     cmds:
@@ -16,7 +37,7 @@ tasks:
 
   build:
     desc: Build the library
-    deps: [tidy]
+    deps: [proto, tidy]
     cmds:
       - go build ./...
 
@@ -53,4 +74,5 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - rm -f coverage.out coverage.html
+      - rm -rf examples/kv/gen
       - go clean ./...

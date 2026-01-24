@@ -24,4 +24,7 @@ var (
 
 	// ErrInvalidConfig is returned when configuration validation fails.
 	ErrInvalidConfig = errors.New("invalid configuration")
+
+	// ErrInvalidPluginImpl is returned when a plugin implementation has the wrong type.
+	ErrInvalidPluginImpl = errors.New("invalid plugin implementation type")
 )
