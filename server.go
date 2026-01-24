@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
 )
 
 // ServeConfig configures a plugin server.
@@ -63,6 +65,13 @@ type ServeConfig struct {
 	// Server listens on this channel and initiates graceful shutdown.
 	// If nil, server runs until killed (SIGTERM/SIGINT).
 	StopCh <-chan struct{}
+
+	// ===== Health =====
+
+	// HealthService manages health status for plugins.
+	// If set, health service and HTTP endpoints are registered.
+	// Set to nil to disable health checking.
+	HealthService *HealthServer
 }
 
 // Validate checks ServeConfig for errors.
@@ -130,6 +139,21 @@ func Serve(cfg *ServeConfig) error {
 	handshakePath, handshakeHandler := HandshakeServerHandler(handshakeServer)
 	mux.Handle(handshakePath, handshakeHandler)
 
+	// Register health service (if enabled)
+	if cfg.HealthService != nil {
+		// Set overall health to SERVING
+		cfg.HealthService.SetServingStatus("", connectpluginv1.ServingStatus_SERVING_STATUS_SERVING)
+
+		// Register Connect health service
+		healthPath, healthHandler := HealthServerHandler(cfg.HealthService)
+		mux.Handle(healthPath, healthHandler)
+
+		// Register HTTP endpoints for Kubernetes
+		httpHealthHandler := HTTPHealthHandler(cfg.HealthService)
+		mux.Handle("/healthz", httpHealthHandler)
+		mux.Handle("/readyz", httpHealthHandler)
+	}
+
 	// Register plugin services
 	for name, plugin := range cfg.Plugins {
 		impl, ok := cfg.Impls[name]
@@ -143,9 +167,13 @@ func Serve(cfg *ServeConfig) error {
 		}
 
 		mux.Handle(path, handler)
+
+		// Set plugin health to SERVING (if health enabled)
+		if cfg.HealthService != nil {
+			cfg.HealthService.SetServingStatus(name, connectpluginv1.ServingStatus_SERVING_STATUS_SERVING)
+		}
 	}
 
-	// TODO: Register health service (if cfg.HealthService != nil)
 	// TODO: Register capability broker (if len(cfg.HostCapabilities) > 0)
 
 	// Create HTTP server
@@ -190,6 +218,11 @@ func Serve(cfg *ServeConfig) error {
 func gracefulShutdown(srv *http.Server, cfg *ServeConfig) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.GracefulShutdownTimeout)
 	defer cancel()
+
+	// Set health to NOT_SERVING (if health enabled)
+	if cfg.HealthService != nil {
+		cfg.HealthService.Shutdown()
+	}
 
 	// Call cleanup function if provided
 	if cfg.Cleanup != nil {

@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 
 	"connectrpc.com/connect"
 	connectplugin "github.com/example/connect-plugin-go"
 	kvv1 "github.com/example/connect-plugin-go/examples/kv/gen"
 	"github.com/example/connect-plugin-go/examples/kv/gen/kvv1connect"
 	kvplugin "github.com/example/connect-plugin-go/examples/kv/plugin"
+	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
+	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 )
 
 func main() {
@@ -31,6 +34,31 @@ func main() {
 	log.Println("Connecting to plugin...")
 	if err := client.Connect(ctx); err != nil {
 		log.Fatal("Failed to connect:", err)
+	}
+
+	// Check server health
+	log.Println("Checking server health...")
+	healthClient := connectpluginv1connect.NewHealthServiceClient(
+		&http.Client{},
+		"http://localhost:8080",
+	)
+	healthResp, err := healthClient.Check(ctx, connect.NewRequest(&connectpluginv1.HealthCheckRequest{
+		Service: "", // Overall health
+	}))
+	if err != nil {
+		log.Printf("Health check error: %v (continuing anyway)", err)
+	} else {
+		log.Printf("✓ Server health: %v", healthResp.Msg.Status)
+	}
+
+	// Check KV plugin-specific health
+	kvHealthResp, err := healthClient.Check(ctx, connect.NewRequest(&connectpluginv1.HealthCheckRequest{
+		Service: "kv",
+	}))
+	if err != nil {
+		log.Printf("KV health check error: %v (continuing anyway)", err)
+	} else {
+		log.Printf("✓ KV plugin health: %v", kvHealthResp.Msg.Status)
 	}
 
 	log.Println("Dispensing KV plugin...")

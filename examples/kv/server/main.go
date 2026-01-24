@@ -14,6 +14,9 @@ func main() {
 	// Create KV store implementation
 	store := kvimpl.NewStore()
 
+	// Create health service
+	healthService := connectplugin.NewHealthServer()
+
 	// Serve the plugin
 	if err := connectplugin.Serve(&connectplugin.ServeConfig{
 		Addr: ":8080",
@@ -23,6 +26,7 @@ func main() {
 		Impls: map[string]any{
 			"kv": store,
 		},
+		HealthService: healthService,
 	}); err != nil {
 		log.Fatal("Server error:", err)
 	}
