@@ -4,144 +4,191 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
+	"syscall"
 	"time"
-
-	"connectrpc.com/connect"
 )
 
-// ServeConfig configures the plugin server.
+// ServeConfig configures a plugin server.
 type ServeConfig struct {
-	// Plugins are the plugins to serve.
+	// ===== Plugins & Implementations =====
+
+	// Plugins defines the plugin types this server provides.
+	// Key = plugin name (e.g., "kv", "auth")
 	Plugins PluginSet
 
-	// VersionedPlugins is a map of PluginSets for specific protocol versions.
-	VersionedPlugins map[int]PluginSet
+	// Impls maps plugin names to their implementations.
+	// The impl is passed to Plugin.ConnectServer().
+	// Key must match a key in Plugins.
+	Impls map[string]any
 
-	// ProtocolVersion is the protocol version being served.
+	// ProtocolVersion is the application protocol version this server implements.
+	// Used during handshake negotiation.
+	// Default: 1
 	ProtocolVersion int
 
-	// Addr is the address to listen on (e.g., ":8080").
-	// If empty, defaults to ":8080".
+	// ===== Server Configuration =====
+
+	// Addr is the address to listen on.
+	// Examples: ":8080", "0.0.0.0:8080", "localhost:8080"
+	// Default: ":8080"
 	Addr string
 
-	// Listener is an optional pre-created listener.
-	// If set, Addr is ignored.
-	Listener net.Listener
+	// ===== Lifecycle =====
 
-	// GracefulTimeout is the timeout for graceful shutdown.
-	// Defaults to 30 seconds.
-	GracefulTimeout time.Duration
+	// GracefulShutdownTimeout is max time for graceful shutdown.
+	// After timeout, forces shutdown.
+	// Default: 30 seconds
+	// Relies on Kubernetes terminationGracePeriodSeconds, not internal delays.
+	GracefulShutdownTimeout time.Duration
 
-	// Interceptors are Connect interceptors applied to all handlers.
-	Interceptors []connect.Interceptor
+	// Cleanup is called during graceful shutdown before server stops.
+	// Use for closing resources (DB connections, caches, etc).
+	// Context has GracefulShutdownTimeout deadline.
+	// If Cleanup returns error, it is logged but shutdown continues.
+	Cleanup func(context.Context) error
 
-	// Test, if non-nil, puts the server in test mode.
-	Test *ServeTestConfig
+	// StopCh signals server shutdown.
+	// Server listens on this channel and initiates graceful shutdown.
+	// If nil, server runs until killed (SIGTERM/SIGINT).
+	StopCh <-chan struct{}
 }
 
-// ServeTestConfig configures plugin serving for test mode.
-type ServeTestConfig struct {
-	// Context, if set, will cause the server to shut down when cancelled.
-	Context context.Context
+// Validate checks ServeConfig for errors.
+func (cfg *ServeConfig) Validate() error {
+	// Check plugins and impls are set
+	if cfg.Plugins == nil {
+		return fmt.Errorf("%w: Plugins must be set", ErrInvalidConfig)
+	}
 
-	// CloseCh, if non-nil, will be closed when serving exits.
-	CloseCh chan<- struct{}
-}
+	if cfg.Impls == nil {
+		return fmt.Errorf("%w: Impls must be set", ErrInvalidConfig)
+	}
 
-// Handler is the interface for plugin HTTP handlers.
-type Handler interface {
-	http.Handler
+	// Check all plugins have implementations
+	for name := range cfg.Plugins {
+		if _, ok := cfg.Impls[name]; !ok {
+			return fmt.Errorf("%w: no implementation for plugin %q", ErrInvalidConfig, name)
+		}
+	}
 
-	// Path returns the base path for this handler.
-	Path() string
+	// Check all impls have plugins
+	for name := range cfg.Impls {
+		if _, ok := cfg.Plugins[name]; !ok {
+			return fmt.Errorf("%w: no plugin definition for impl %q", ErrInvalidConfig, name)
+		}
+	}
+
+	// Validate the plugin set (checks path conflicts)
+	if err := cfg.Plugins.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+
+	// Validate protocol version
+	if cfg.ProtocolVersion < 1 {
+		return fmt.Errorf("%w: ProtocolVersion must be >= 1", ErrInvalidConfig)
+	}
+
+	return nil
 }
 
 // Serve serves the plugins defined in the configuration.
-// This function blocks until the server is shut down.
-func Serve(config *ServeConfig) error {
-	if config.Addr == "" && config.Listener == nil {
-		config.Addr = ":8080"
+// This function blocks until the server is shut down via StopCh or signal.
+func Serve(cfg *ServeConfig) error {
+	// Apply defaults
+	if cfg.Addr == "" {
+		cfg.Addr = ":8080"
 	}
-	if config.GracefulTimeout == 0 {
-		config.GracefulTimeout = 30 * time.Second
+	if cfg.GracefulShutdownTimeout == 0 {
+		cfg.GracefulShutdownTimeout = 30 * time.Second
+	}
+	if cfg.ProtocolVersion == 0 {
+		cfg.ProtocolVersion = 1
+	}
+
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
 
 	// Build the HTTP mux
 	mux := http.NewServeMux()
 
-	// Register each plugin
-	for name, p := range config.Plugins {
-		cp, ok := p.(ConnectPlugin)
+	// Register plugin services
+	for name, plugin := range cfg.Plugins {
+		impl, ok := cfg.Impls[name]
 		if !ok {
-			return fmt.Errorf("plugin %q does not implement ConnectPlugin", name)
+			return fmt.Errorf("no implementation for plugin %q", name)
 		}
 
-		// Get the handler - for now we pass nil as impl
-		// In a real implementation, the ServeConfig would include implementations
-		handler, err := cp.Server(nil)
+		path, handler, err := plugin.ConnectServer(impl)
 		if err != nil {
-			return fmt.Errorf("failed to create handler for plugin %q: %w", name, err)
+			return fmt.Errorf("plugin %q: %w", name, err)
 		}
 
-		mux.Handle(handler.Path(), handler)
+		mux.Handle(path, handler)
 	}
 
-	// Create the HTTP server
-	server := &http.Server{
+	// TODO: Register handshake service (if cfg.HandshakeService != nil)
+	// TODO: Register health service (if cfg.HealthService != nil)
+	// TODO: Register capability broker (if len(cfg.HostCapabilities) > 0)
+
+	// Create HTTP server
+	srv := &http.Server{
+		Addr:    cfg.Addr,
 		Handler: mux,
 	}
 
-	// Create listener if not provided
-	var listener net.Listener
-	var err error
-	if config.Listener != nil {
-		listener = config.Listener
-	} else {
-		listener, err = net.Listen("tcp", config.Addr)
-		if err != nil {
-			return fmt.Errorf("failed to listen on %s: %w", config.Addr, err)
+	// Set up shutdown handling
+	stopCh := cfg.StopCh
+	if stopCh == nil {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		// Convert signal channel to struct{} channel
+		shutdownCh := make(chan struct{})
+		go func() {
+			<-sigCh
+			close(shutdownCh)
+		}()
+		stopCh = shutdownCh
+	}
+
+	// Start server in background
+	errCh := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	// Wait for shutdown signal or server error
+	select {
+	case err := <-errCh:
+		return err
+	case <-stopCh:
+		// Graceful shutdown
+		return gracefulShutdown(srv, cfg)
+	}
+}
+
+// gracefulShutdown performs graceful shutdown of the server.
+func gracefulShutdown(srv *http.Server, cfg *ServeConfig) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.GracefulShutdownTimeout)
+	defer cancel()
+
+	// Call cleanup function if provided
+	if cfg.Cleanup != nil {
+		if err := cfg.Cleanup(shutdownCtx); err != nil {
+			// Log error but continue shutdown
+			fmt.Fprintf(os.Stderr, "Cleanup error: %v\n", err)
 		}
 	}
 
-	// Handle shutdown
-	var shutdownOnce sync.Once
-	shutdown := func() {
-		shutdownOnce.Do(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), config.GracefulTimeout)
-			defer cancel()
-			_ = server.Shutdown(ctx)
-		})
-	}
-
-	// Set up signal handling or test context
-	if config.Test != nil && config.Test.Context != nil {
-		go func() {
-			<-config.Test.Context.Done()
-			shutdown()
-		}()
-	} else {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt)
-		go func() {
-			<-sigCh
-			shutdown()
-		}()
-	}
-
-	// Serve
-	err = server.Serve(listener)
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-
-	// Notify test that we're done
-	if config.Test != nil && config.Test.CloseCh != nil {
-		close(config.Test.CloseCh)
+	// Shutdown HTTP server (sends GOAWAY for HTTP/2, drains connections)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("server shutdown: %w", err)
 	}
 
 	return nil

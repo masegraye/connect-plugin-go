@@ -2,126 +2,126 @@ package connectplugin
 
 import (
 	"context"
-	"crypto/tls"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"connectrpc.com/connect"
 )
 
-// ClientConfig is the configuration for creating a new plugin client.
+// ClientConfig is the minimal configuration required to create a plugin client.
+// For most use cases, only Endpoint and Plugins are needed.
 type ClientConfig struct {
-	// Endpoint is the URL of the plugin service.
-	// Example: "http://localhost:8080" or "https://plugin-svc.default.svc:8080"
+	// Endpoint is the plugin service URL.
+	// Required. Examples: "http://localhost:8080", "https://plugin.example.com"
 	Endpoint string
 
-	// Plugins are the plugins that can be consumed from this endpoint.
+	// Plugins defines available plugin types.
+	// Required. Maps plugin name to Plugin implementation.
 	Plugins PluginSet
-
-	// VersionedPlugins is a map of PluginSets for specific protocol versions.
-	// This can be used to negotiate a compatible version between client and server.
-	VersionedPlugins map[int]PluginSet
-
-	// ProtocolVersion is the protocol version to use.
-	// If VersionedPlugins is set, this is used as the preferred version.
-	ProtocolVersion int
-
-	// Protocol specifies which RPC protocol to use.
-	// Defaults to ProtocolConnect.
-	Protocol Protocol
-
-	// HTTPClient is the HTTP client to use for requests.
-	// If nil, a default client with reasonable timeouts is created.
-	HTTPClient *http.Client
-
-	// TLSConfig is the TLS configuration for secure connections.
-	// If nil and the endpoint uses https, the system root CAs are used.
-	TLSConfig *tls.Config
-
-	// ConnectTimeout is the timeout for establishing the initial connection.
-	// Defaults to 30 seconds.
-	ConnectTimeout time.Duration
-
-	// RequestTimeout is the default timeout for RPC requests.
-	// Defaults to 60 seconds. Can be overridden per-request with context.
-	RequestTimeout time.Duration
-
-	// Interceptors are Connect interceptors applied to all RPC calls.
-	Interceptors []connect.Interceptor
 }
 
-// Client manages the connection to a plugin service and dispenses
-// plugin implementations.
+// Validate checks ClientConfig for errors.
+func (cfg *ClientConfig) Validate() error {
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("%w: Endpoint is required", ErrInvalidConfig)
+	}
+
+	if cfg.Plugins == nil {
+		return fmt.Errorf("%w: Plugins is required", ErrInvalidConfig)
+	}
+
+	if len(cfg.Plugins) == 0 {
+		return fmt.Errorf("%w: Plugins must contain at least one plugin", ErrInvalidConfig)
+	}
+
+	// Validate the plugin set
+	if err := cfg.Plugins.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+
+	return nil
+}
+
+// Client manages the connection to a plugin service and dispenses plugin implementations.
 type Client struct {
-	config   *ClientConfig
-	mu       sync.Mutex
-	conn     ClientConn
-	protocol ClientProtocol
-	closed   bool
+	cfg       ClientConfig
+	mu        sync.RWMutex
+	connected bool
+	closed    bool
+
+	// HTTP client for Connect RPCs (created on Connect)
+	httpClient connect.HTTPClient
 }
 
 // NewClient creates a new plugin client with the given configuration.
-func NewClient(config *ClientConfig) *Client {
-	if config.ConnectTimeout == 0 {
-		config.ConnectTimeout = 30 * time.Second
-	}
-	if config.RequestTimeout == 0 {
-		config.RequestTimeout = 60 * time.Second
-	}
-	if config.Protocol == "" {
-		config.Protocol = ProtocolConnect
-	}
-	if config.HTTPClient == nil {
-		transport := &http.Transport{
-			TLSClientConfig: config.TLSConfig,
-		}
-		config.HTTPClient = &http.Client{
-			Transport: transport,
-			Timeout:   config.RequestTimeout,
-		}
+// The client uses lazy connection - it doesn't connect until the first
+// plugin is dispensed or Connect() is called explicitly.
+func NewClient(cfg ClientConfig) (*Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 
 	return &Client{
-		config: config,
-	}
+		cfg: cfg,
+	}, nil
 }
 
-// Client returns the protocol client for this connection.
-// This establishes the connection if not already connected.
-func (c *Client) Client() (ClientProtocol, error) {
+// Connect establishes the connection to the plugin server.
+// This is called automatically on first Dispense() but can be called
+// explicitly for eager connection or to handle connection errors upfront.
+func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.closed {
-		return nil, errors.New("client is closed")
+		return ErrClientClosed
 	}
 
-	if c.protocol != nil {
-		return c.protocol, nil
+	if c.connected {
+		return nil // Already connected
 	}
 
-	// Create the connection
-	conn := &connectClientConn{
-		endpoint:     c.config.Endpoint,
-		httpClient:   c.config.HTTPClient,
-		interceptors: c.config.Interceptors,
-		protocol:     c.config.Protocol,
-	}
-	c.conn = conn
+	// Create HTTP client for Connect RPCs
+	// TODO: Add TLS, timeouts, interceptors from ClientOptions
+	c.httpClient = &http.Client{}
 
-	// Create the protocol client
-	c.protocol = &connectProtocolClient{
-		conn:    conn,
-		plugins: c.config.Plugins,
-	}
+	// TODO: Perform handshake
+	// TODO: Start health monitoring if configured
+	// TODO: Start endpoint watcher if using discovery
 
-	return c.protocol, nil
+	c.connected = true
+	return nil
 }
 
-// Close closes the client connection.
+// Dispense returns an implementation of the named plugin.
+// This is the secondary API - prefer DispenseTyped[I] for type safety.
+//
+// The plugin interface is returned as interface{} and must be type-asserted:
+//
+//	raw, err := client.Dispense("kv")
+//	kvStore := raw.(kv.KVStore)
+func (c *Client) Dispense(name string) (any, error) {
+	// Ensure connected (lazy connection)
+	if err := c.ensureConnected(); err != nil {
+		return nil, err
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Get plugin from set
+	plugin, ok := c.cfg.Plugins.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrPluginNotFound, name)
+	}
+
+	// Create client instance
+	return plugin.ConnectClient(c.cfg.Endpoint, c.httpClient)
+}
+
+// Close closes the client and releases resources.
+// This should be called when the client is no longer needed.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -129,91 +129,27 @@ func (c *Client) Close() error {
 	if c.closed {
 		return nil
 	}
+
 	c.closed = true
 
-	if c.conn != nil {
-		return c.conn.Close()
-	}
+	// TODO: Stop health monitoring
+	// TODO: Stop endpoint watcher
+	// TODO: Close HTTP client if we created it
+
 	return nil
 }
 
-// ClientProtocol is the interface for dispensing plugins.
-type ClientProtocol interface {
-	// Dispense returns an implementation of the named plugin.
-	Dispense(name string) (interface{}, error)
-
-	// Ping checks if the plugin service is reachable.
-	Ping(ctx context.Context) error
-
-	// Close closes the protocol connection.
-	Close() error
-}
-
-// ClientConn represents a connection to a plugin service.
-type ClientConn interface {
-	// Endpoint returns the endpoint URL.
-	Endpoint() string
-
-	// HTTPClient returns the HTTP client used for requests.
-	HTTPClient() *http.Client
-
-	// Interceptors returns the Connect interceptors.
-	Interceptors() []connect.Interceptor
-
-	// Close closes the connection.
-	Close() error
-}
-
-// connectClientConn implements ClientConn for Connect RPC.
-type connectClientConn struct {
-	endpoint     string
-	httpClient   *http.Client
-	interceptors []connect.Interceptor
-	protocol     Protocol
-}
-
-func (c *connectClientConn) Endpoint() string {
-	return c.endpoint
-}
-
-func (c *connectClientConn) HTTPClient() *http.Client {
-	return c.httpClient
-}
-
-func (c *connectClientConn) Interceptors() []connect.Interceptor {
-	return c.interceptors
-}
-
-func (c *connectClientConn) Close() error {
-	// HTTP client connections are pooled and managed automatically
-	return nil
-}
-
-// connectProtocolClient implements ClientProtocol for Connect RPC.
-type connectProtocolClient struct {
-	conn    ClientConn
-	plugins PluginSet
-}
-
-func (c *connectProtocolClient) Dispense(name string) (interface{}, error) {
-	raw, ok := c.plugins[name]
-	if !ok {
-		return nil, fmt.Errorf("unknown plugin type: %s", name)
+// ensureConnected ensures the client is connected.
+// Must be called with read lock NOT held (it needs write lock).
+func (c *Client) ensureConnected() error {
+	c.mu.RLock()
+	if c.connected {
+		c.mu.RUnlock()
+		return nil
 	}
+	c.mu.RUnlock()
 
-	p, ok := raw.(ConnectPlugin)
-	if !ok {
-		return nil, fmt.Errorf("plugin %q does not implement ConnectPlugin", name)
-	}
-
-	return p.Client(c.conn)
-}
-
-func (c *connectProtocolClient) Ping(ctx context.Context) error {
-	// TODO: Implement health check ping
-	return nil
-}
-
-func (c *connectProtocolClient) Close() error {
-	return c.conn.Close()
+	// Need to connect - call Connect with background context
+	// TODO: Make context configurable
+	return c.Connect(context.Background())
 }
