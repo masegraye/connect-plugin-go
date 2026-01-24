@@ -63,6 +63,13 @@ func main() {
 		defer close(done)
 		for watchStream.Receive() {
 			event := watchStream.Msg()
+
+			// Skip the initial watch_started event (stream establishment)
+			if event.Key == "_watch_started" {
+				log.Printf("📡 Watch stream established")
+				continue
+			}
+
 			count := eventCount.Add(1)
 			log.Printf("📡 Watch event #%d: %v key=%s", count, event.Type, event.Key)
 		}
