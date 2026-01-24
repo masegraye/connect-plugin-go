@@ -97,3 +97,43 @@ tasks:
     deps: [build-examples]
     cmds:
       - ./dist/kv-host
+
+  # Integration tests
+  integ:kv:server:
+    desc: Run KV plugin server for integration testing
+    deps: [build-examples]
+    cmds:
+      - ./dist/kv-server
+
+  integ:kv:client:
+    desc: Run KV plugin client (requires integ:kv:server running)
+    deps: [build-examples]
+    cmds:
+      - ./dist/kv-host
+
+  integ:kv:test:
+    desc: Integration test - run server and client together
+    deps: [build-examples]
+    cmds:
+      - |
+        # Start server in background
+        ./dist/kv-server &
+        SERVER_PID=$!
+
+        # Wait for server to start
+        sleep 1
+
+        # Run client
+        ./dist/kv-host
+        CLIENT_EXIT=$?
+
+        # Kill server
+        kill $SERVER_PID 2>/dev/null || true
+
+        # Exit with client's exit code
+        exit $CLIENT_EXIT
+
+  integ:all:
+    desc: Run all integration tests
+    cmds:
+      - task: integ:kv:test

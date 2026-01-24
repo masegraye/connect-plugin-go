@@ -65,6 +65,27 @@ task example-server
 task example-client
 ```
 
+### Integration Tests
+
+Run automated integration tests (server + client together):
+
+```bash
+task integ:kv:test
+```
+
+Run all integration tests:
+
+```bash
+task integ:all
+```
+
+Run server and client separately for manual testing:
+
+```bash
+task integ:kv:server  # Terminal 1
+task integ:kv:client  # Terminal 2
+```
+
 ### Run Tests
 
 ```bash
