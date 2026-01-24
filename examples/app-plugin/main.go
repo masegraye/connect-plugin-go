@@ -64,6 +64,14 @@ func main() {
 	path, handler := connectpluginv1connect.NewPluginControlHandler(controlHandler)
 	mux.Handle(path, handler)
 
+	// Implement PluginIdentity service (for Model A)
+	identityHandler := &pluginIdentityHandler{
+		client:   client,
+		metadata: client.Config().Metadata,
+	}
+	identityPath, identityH := connectpluginv1connect.NewPluginIdentityHandler(identityHandler)
+	mux.Handle(identityPath, identityH)
+
 	// Simple app endpoint
 	mux.HandleFunc("/app.v1.App/Process", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -75,29 +83,6 @@ func main() {
 		Addr:    ":" + port,
 		Handler: mux,
 	}
-
-	// Report healthy after discovering cache
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-
-		regClient := client.RegistryClient()
-		discReq := connect.NewRequest(&connectpluginv1.DiscoverServiceRequest{
-			ServiceType: "cache",
-			MinVersion:  "1.0.0",
-		})
-		discReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
-		discReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
-
-		_, err := regClient.DiscoverService(ctx, discReq)
-		if err != nil {
-			log.Printf("Cache not available yet, reporting degraded: %v", err)
-			client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_DEGRADED,
-				"cache dependency not available", []string{"cache"})
-		} else {
-			log.Println("Cache discovered, reporting healthy")
-			client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_HEALTHY, "", nil)
-		}
-	}()
 
 	// Handle shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -114,8 +99,99 @@ func main() {
 	}
 }
 
+// registerServices checks cache dependency and reports health.
+func registerServices(ctx context.Context, client *connectplugin.Client) {
+	regClient := client.RegistryClient()
+	if regClient == nil {
+		log.Println("Registry client not available yet, skipping registration")
+		return
+	}
+
+	// App plugin doesn't provide services, only checks dependencies
+	time.Sleep(300 * time.Millisecond)
+	discReq := connect.NewRequest(&connectpluginv1.DiscoverServiceRequest{
+		ServiceType: "cache",
+		MinVersion:  "1.0.0",
+	})
+	discReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
+	discReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
+
+	_, err := regClient.DiscoverService(ctx, discReq)
+	if err != nil {
+		log.Printf("Cache not available yet, reporting degraded: %v", err)
+		client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_DEGRADED,
+			"cache dependency not available", []string{"cache"})
+	} else {
+		log.Println("Cache discovered, reporting healthy")
+		client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_HEALTHY, "", nil)
+	}
+}
+
 type pluginControlHandler struct {
 	client *connectplugin.Client
+}
+
+type pluginIdentityHandler struct {
+	client   *connectplugin.Client
+	metadata connectplugin.PluginMetadata
+}
+
+func (h *pluginIdentityHandler) GetPluginInfo(
+	ctx context.Context,
+	req *connect.Request[connectpluginv1.GetPluginInfoRequest],
+) (*connect.Response[connectpluginv1.GetPluginInfoResponse], error) {
+	cfg := h.client.Config()
+
+	provides := make([]*connectpluginv1.ServiceDeclaration, len(cfg.Metadata.Provides))
+	for i, svc := range cfg.Metadata.Provides {
+		provides[i] = &connectpluginv1.ServiceDeclaration{
+			Type:    svc.Type,
+			Version: svc.Version,
+			Path:    svc.Path,
+		}
+	}
+
+	requires := make([]*connectpluginv1.ServiceDependency, len(cfg.Metadata.Requires))
+	for i, dep := range cfg.Metadata.Requires {
+		requires[i] = &connectpluginv1.ServiceDependency{
+			Type:               dep.Type,
+			MinVersion:         dep.MinVersion,
+			RequiredForStartup: dep.RequiredForStartup,
+			WatchForChanges:    dep.WatchForChanges,
+		}
+	}
+
+	return connect.NewResponse(&connectpluginv1.GetPluginInfoResponse{
+		SelfId:      cfg.SelfID,
+		SelfVersion: cfg.SelfVersion,
+		Provides:    provides,
+		Requires:    requires,
+		Metadata: map[string]string{
+			"name":    cfg.Metadata.Name,
+			"version": cfg.Metadata.Version,
+		},
+	}), nil
+}
+
+func (h *pluginIdentityHandler) SetRuntimeIdentity(
+	ctx context.Context,
+	req *connect.Request[connectpluginv1.SetRuntimeIdentityRequest],
+) (*connect.Response[connectpluginv1.SetRuntimeIdentityResponse], error) {
+	log.Printf("Received runtime identity: %s (token: %s...)",
+		req.Msg.RuntimeId, req.Msg.RuntimeToken[:8])
+
+	// Store runtime identity (Model A)
+	h.client.SetRuntimeIdentity(req.Msg.RuntimeId, req.Msg.RuntimeToken, req.Msg.HostUrl)
+
+	// Model A: Register services after receiving identity
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		registerServices(context.Background(), h.client)
+	}()
+
+	return connect.NewResponse(&connectpluginv1.SetRuntimeIdentityResponse{
+		Acknowledged: true,
+	}), nil
 }
 
 func (h *pluginControlHandler) GetHealth(

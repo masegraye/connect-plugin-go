@@ -62,44 +62,89 @@ func NewPlatform(
 	}
 }
 
-// AddPlugin adds a plugin to the platform at runtime.
+// AddPlugin adds a plugin to the platform at runtime (Model A: platform-managed).
+// The platform calls the plugin's PluginIdentity service to coordinate registration.
 func (p *Platform) AddPlugin(ctx context.Context, config PluginConfig) error {
-	// 1. Validate dependencies are available
-	for _, dep := range config.Metadata.Requires {
-		if dep.RequiredForStartup && !p.depGraph.HasService(dep.Type) {
-			return fmt.Errorf("required service %q not available for plugin %q",
-				dep.Type, config.SelfID)
+	// 1. Call plugin's GetPluginInfo() to retrieve metadata
+	// This is the bidirectional handshake for Model A
+	infoClient := NewPluginIdentityClient(config.Endpoint, nil)
+	infoResp, err := infoClient.GetPluginInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get plugin info: %w", err)
+	}
+
+	// Use metadata from plugin response (trust the plugin's declarations)
+	selfID := infoResp.SelfId
+	if selfID == "" {
+		selfID = config.SelfID // Fallback to config
+	}
+
+	// Convert proto types to internal types
+	provides := make([]ServiceDeclaration, len(infoResp.Provides))
+	for i, p := range infoResp.Provides {
+		provides[i] = ServiceDeclaration{
+			Type:    p.Type,
+			Version: p.Version,
+			Path:    p.Path,
 		}
 	}
 
-	// 2. Generate runtime identity
-	runtimeID := generateRuntimeID(config.SelfID)
+	requires := make([]ServiceDependency, len(infoResp.Requires))
+	for i, r := range infoResp.Requires {
+		requires[i] = ServiceDependency{
+			Type:               r.Type,
+			MinVersion:         r.MinVersion,
+			RequiredForStartup: r.RequiredForStartup,
+			WatchForChanges:    r.WatchForChanges,
+		}
+	}
+
+	// 2. Validate dependencies are available
+	for _, dep := range requires {
+		if dep.RequiredForStartup && !p.depGraph.HasService(dep.Type) {
+			return fmt.Errorf("required service %q not available for plugin %q",
+				dep.Type, selfID)
+		}
+	}
+
+	// 3. Generate runtime identity
+	runtimeID := generateRuntimeID(selfID)
 	runtimeToken := generateToken()
 
-	// 3. Create plugin instance
+	// 4. Call plugin's SetRuntimeIdentity() to assign identity
+	if err := infoClient.SetRuntimeIdentity(ctx, runtimeID, runtimeToken, ""); err != nil {
+		return fmt.Errorf("failed to set runtime identity: %w", err)
+	}
+
+	// 5. Create plugin instance
 	instance := &PluginInstance{
 		RuntimeID: runtimeID,
-		SelfID:    config.SelfID,
-		Metadata:  config.Metadata,
-		Endpoint:  config.Endpoint,
-		Token:     runtimeToken,
-		control:   NewPluginControlClient(config.Endpoint, nil), // TODO: Use authenticated client
+		SelfID:    selfID,
+		Metadata: PluginMetadata{
+			Name:     infoResp.Metadata["name"],
+			Version:  infoResp.Metadata["version"],
+			Provides: provides,
+			Requires: requires,
+		},
+		Endpoint: config.Endpoint,
+		Token:    runtimeToken,
+		control:  NewPluginControlClient(config.Endpoint, nil),
 	}
 
-	// 4. Add to dependency graph
+	// 6. Add to dependency graph
 	depNode := &depgraph.Node{
 		RuntimeID: runtimeID,
-		SelfID:    config.SelfID,
+		SelfID:    selfID,
 	}
 
-	for _, svc := range config.Metadata.Provides {
+	for _, svc := range provides {
 		depNode.Provides = append(depNode.Provides, depgraph.ServiceDeclaration{
 			Type:    svc.Type,
 			Version: svc.Version,
 		})
 	}
 
-	for _, dep := range config.Metadata.Requires {
+	for _, dep := range requires {
 		depNode.Requires = append(depNode.Requires, depgraph.ServiceDependency{
 			Type:               dep.Type,
 			MinVersion:         dep.MinVersion,
@@ -110,16 +155,17 @@ func (p *Platform) AddPlugin(ctx context.Context, config PluginConfig) error {
 
 	p.depGraph.Add(depNode)
 
-	// 5. Wait for plugin to become healthy
+	// 7. Wait for plugin to register services and become healthy
+	// Plugin should call RegisterService() and ReportHealth() using the assigned runtime_id
 	if err := p.waitForHealthy(ctx, runtimeID, 30*time.Second); err != nil {
 		p.depGraph.Remove(runtimeID)
-		return fmt.Errorf("plugin %q did not become healthy: %w", config.SelfID, err)
+		return fmt.Errorf("plugin %q did not become healthy: %w", selfID, err)
 	}
 
-	// 6. Register plugin endpoint in router
+	// 8. Register plugin endpoint in router
 	p.router.RegisterPluginEndpoint(runtimeID, config.Endpoint)
 
-	// 7. Store plugin instance
+	// 9. Store plugin instance
 	p.plugins[runtimeID] = instance
 
 	return nil

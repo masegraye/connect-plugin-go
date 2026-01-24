@@ -22,7 +22,10 @@ func main() {
 		port = "8082"
 	}
 	hostURL := os.Getenv("HOST_URL")
-	if hostURL == "" {
+
+	// Deployment model detection
+	modelB := hostURL != ""
+	if !modelB {
 		hostURL = "http://localhost:8080"
 	}
 
@@ -51,29 +54,19 @@ func main() {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 
-	// Connect to host
 	ctx := context.Background()
-	if err := client.Connect(ctx); err != nil {
-		log.Fatalf("Failed to connect: %v", err)
-	}
 
-	log.Printf("Cache plugin started with runtime_id: %s", client.RuntimeID())
-
-	// Register services with host
-	regClient := client.RegistryClient()
-	for _, svc := range client.Config().Metadata.Provides {
-		regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
-			ServiceType:  svc.Type,
-			Version:      svc.Version,
-			EndpointPath: svc.Path,
-		})
-		regReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
-		regReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
-
-		if _, err := regClient.RegisterService(ctx, regReq); err != nil {
-			log.Fatalf("Failed to register service %s: %v", svc.Type, err)
+	// Model B: Connect and register immediately
+	if modelB {
+		if err := client.Connect(ctx); err != nil {
+			log.Fatalf("Failed to connect: %v", err)
 		}
-		log.Printf("Registered service: %s v%s", svc.Type, svc.Version)
+		log.Printf("Cache plugin started (Model B) with runtime_id: %s", client.RuntimeID())
+
+		// Register services immediately
+		registerServices(ctx, client)
+	} else {
+		log.Printf("Cache plugin started (Model A) - waiting for host to assign identity")
 	}
 
 	// Start HTTP server
@@ -83,6 +76,14 @@ func main() {
 	controlHandler := &pluginControlHandler{client: client}
 	path, handler := connectpluginv1connect.NewPluginControlHandler(controlHandler)
 	mux.Handle(path, handler)
+
+	// Implement PluginIdentity service (for Model A)
+	identityHandler := &pluginIdentityHandler{
+		client:   client,
+		metadata: client.Config().Metadata,
+	}
+	identityPath, identityH := connectpluginv1connect.NewPluginIdentityHandler(identityHandler)
+	mux.Handle(identityPath, identityH)
 
 	// Simple cache service endpoint (dummy implementation)
 	mux.HandleFunc("/cache.v1.Cache/Get", func(w http.ResponseWriter, r *http.Request) {
@@ -95,30 +96,6 @@ func main() {
 		Addr:    ":" + port,
 		Handler: mux,
 	}
-
-	// Report healthy after discovering logger
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-
-		// Try to discover logger service
-		regClient := client.RegistryClient()
-		discReq := connect.NewRequest(&connectpluginv1.DiscoverServiceRequest{
-			ServiceType: "logger",
-			MinVersion:  "1.0.0",
-		})
-		discReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
-		discReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
-
-		_, err := regClient.DiscoverService(ctx, discReq)
-		if err != nil {
-			log.Printf("Logger not available yet, reporting degraded: %v", err)
-			client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_DEGRADED,
-				"logger dependency not available", []string{"logger"})
-		} else {
-			log.Println("Logger discovered, reporting healthy")
-			client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_HEALTHY, "", nil)
-		}
-	}()
 
 	// Handle shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -135,8 +112,114 @@ func main() {
 	}
 }
 
+// registerServices registers services and checks logger dependency.
+func registerServices(ctx context.Context, client *connectplugin.Client) {
+	regClient := client.RegistryClient()
+	if regClient == nil {
+		log.Println("Registry client not available yet, skipping registration")
+		return
+	}
+
+	for _, svc := range client.Config().Metadata.Provides {
+		regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
+			ServiceType:  svc.Type,
+			Version:      svc.Version,
+			EndpointPath: svc.Path,
+		})
+		regReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
+		regReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
+
+		if _, err := regClient.RegisterService(ctx, regReq); err != nil {
+			log.Fatalf("Failed to register service %s: %v", svc.Type, err)
+		}
+		log.Printf("Registered service: %s v%s", svc.Type, svc.Version)
+	}
+
+	// Check for logger dependency
+	time.Sleep(200 * time.Millisecond)
+	discReq := connect.NewRequest(&connectpluginv1.DiscoverServiceRequest{
+		ServiceType: "logger",
+		MinVersion:  "1.0.0",
+	})
+	discReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
+	discReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
+
+	_, err := regClient.DiscoverService(ctx, discReq)
+	if err != nil {
+		log.Printf("Logger not available yet, reporting degraded: %v", err)
+		client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_DEGRADED,
+			"logger dependency not available", []string{"logger"})
+	} else {
+		log.Println("Logger discovered, reporting healthy")
+		client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_HEALTHY, "", nil)
+	}
+}
+
 type pluginControlHandler struct {
 	client *connectplugin.Client
+}
+
+type pluginIdentityHandler struct {
+	client   *connectplugin.Client
+	metadata connectplugin.PluginMetadata
+}
+
+func (h *pluginIdentityHandler) GetPluginInfo(
+	ctx context.Context,
+	req *connect.Request[connectpluginv1.GetPluginInfoRequest],
+) (*connect.Response[connectpluginv1.GetPluginInfoResponse], error) {
+	cfg := h.client.Config()
+
+	provides := make([]*connectpluginv1.ServiceDeclaration, len(cfg.Metadata.Provides))
+	for i, svc := range cfg.Metadata.Provides {
+		provides[i] = &connectpluginv1.ServiceDeclaration{
+			Type:    svc.Type,
+			Version: svc.Version,
+			Path:    svc.Path,
+		}
+	}
+
+	requires := make([]*connectpluginv1.ServiceDependency, len(cfg.Metadata.Requires))
+	for i, dep := range cfg.Metadata.Requires {
+		requires[i] = &connectpluginv1.ServiceDependency{
+			Type:               dep.Type,
+			MinVersion:         dep.MinVersion,
+			RequiredForStartup: dep.RequiredForStartup,
+			WatchForChanges:    dep.WatchForChanges,
+		}
+	}
+
+	return connect.NewResponse(&connectpluginv1.GetPluginInfoResponse{
+		SelfId:      cfg.SelfID,
+		SelfVersion: cfg.SelfVersion,
+		Provides:    provides,
+		Requires:    requires,
+		Metadata: map[string]string{
+			"name":    cfg.Metadata.Name,
+			"version": cfg.Metadata.Version,
+		},
+	}), nil
+}
+
+func (h *pluginIdentityHandler) SetRuntimeIdentity(
+	ctx context.Context,
+	req *connect.Request[connectpluginv1.SetRuntimeIdentityRequest],
+) (*connect.Response[connectpluginv1.SetRuntimeIdentityResponse], error) {
+	log.Printf("Received runtime identity: %s (token: %s...)",
+		req.Msg.RuntimeId, req.Msg.RuntimeToken[:8])
+
+	// Store runtime identity (Model A)
+	h.client.SetRuntimeIdentity(req.Msg.RuntimeId, req.Msg.RuntimeToken, req.Msg.HostUrl)
+
+	// Model A: Register services after receiving identity
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		registerServices(context.Background(), h.client)
+	}()
+
+	return connect.NewResponse(&connectpluginv1.SetRuntimeIdentityResponse{
+		Acknowledged: true,
+	}), nil
 }
 
 func (h *pluginControlHandler) GetHealth(

@@ -283,6 +283,35 @@ func (c *Client) Config() ClientConfig {
 	return c.cfg
 }
 
+// SetRuntimeIdentity sets the runtime identity assigned by the host (Model A).
+// This is called by the plugin's PluginIdentity.SetRuntimeIdentity handler.
+// For Model B (self-registering), identity is set during handshake automatically.
+func (c *Client) SetRuntimeIdentity(runtimeID, runtimeToken, hostURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.runtimeID = runtimeID
+	c.runtimeToken = runtimeToken
+
+	// Update endpoint if host URL provided
+	if hostURL != "" && c.cfg.Endpoint != hostURL {
+		c.cfg.Endpoint = hostURL
+		c.cfg.HostURL = hostURL
+	}
+
+	// Initialize Phase 2 clients if not already done
+	if c.lifecycleClient == nil && c.httpClient != nil {
+		c.lifecycleClient = connectpluginv1connect.NewPluginLifecycleClient(
+			c.httpClient,
+			c.cfg.Endpoint,
+		)
+		c.registryClient = connectpluginv1connect.NewServiceRegistryClient(
+			c.httpClient,
+			c.cfg.Endpoint,
+		)
+	}
+}
+
 // ReportHealth reports the plugin's health state to the host.
 // This is a Phase 2 feature - only works if runtime identity was assigned.
 func (c *Client) ReportHealth(ctx context.Context, state connectpluginv1.HealthState, reason string, unavailableDeps []string) error {
