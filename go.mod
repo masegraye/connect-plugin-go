@@ -1,4 +1,4 @@
-module github.com/example/connect-plugin-go
+module github.com/masegraye/connect-plugin-go
 
 go 1.24
 
@@ -7,6 +7,7 @@ require connectrpc.com/connect v1.18.1
 require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
+	go.uber.org/fx v1.24.0
 	google.golang.org/protobuf v1.36.9
 )
 
@@ -22,7 +23,6 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/dig v1.19.0 // indirect
-	go.uber.org/fx v1.24.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.26.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect

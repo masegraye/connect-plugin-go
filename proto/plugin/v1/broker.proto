@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package connectplugin.v1;
 
-option go_package = "github.com/example/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
 
 // CapabilityBroker manages host capabilities that plugins can request.
 // Phase 1: Host capabilities only (no plugin-to-plugin service registry).

@@ -3,10 +3,10 @@ package main
 import (
 	"log"
 
-	connectplugin "github.com/example/connect-plugin-go"
-	loggercap "github.com/example/connect-plugin-go/examples/capabilities/logger"
-	kvimpllogger "github.com/example/connect-plugin-go/examples/kv/impl-with-logger"
-	kvplugin "github.com/example/connect-plugin-go/examples/kv/plugin"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	loggercap "github.com/masegraye/connect-plugin-go/examples/capabilities/logger"
+	kvimpllogger "github.com/masegraye/connect-plugin-go/examples/kv/impl-with-logger"
+	kvplugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
 )
 
 func main() {

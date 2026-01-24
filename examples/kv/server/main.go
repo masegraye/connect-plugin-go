@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 
-	connectplugin "github.com/example/connect-plugin-go"
-	kvimpl "github.com/example/connect-plugin-go/examples/kv/impl"
-	kvplugin "github.com/example/connect-plugin-go/examples/kv/plugin"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
+	kvv1plugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	if err := connectplugin.Serve(&connectplugin.ServeConfig{
 		Addr: ":8080",
 		Plugins: connectplugin.PluginSet{
-			"kv": &kvplugin.KVServicePlugin{},
+			"kv": &kvv1plugin.KVServicePlugin{},
 		},
 		Impls: map[string]any{
 			"kv": store,

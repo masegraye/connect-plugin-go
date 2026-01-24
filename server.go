@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
 )
 
 // ServeConfig configures a plugin server.

@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
-	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
-	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
+	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 )
 
 // HealthServer implements the health checking protocol.

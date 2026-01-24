@@ -7,17 +7,17 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	connectplugin "github.com/example/connect-plugin-go"
-	loggercap "github.com/example/connect-plugin-go/examples/capabilities/logger"
-	kvimpl "github.com/example/connect-plugin-go/examples/kv/impl"
-	kvv1 "github.com/example/connect-plugin-go/examples/kv/gen"
-	"github.com/example/connect-plugin-go/examples/kv/gen/kvv1connect"
-	kvplugin "github.com/example/connect-plugin-go/examples/kv/plugin"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	loggercap "github.com/masegraye/connect-plugin-go/examples/capabilities/logger"
+	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
+	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
+	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
+	kvplugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
 	"go.uber.org/fx"
 )
 
 func main() {
-	log.Println("=== KV Plugin with Capability Broker (fx Integration) ===\n")
+	log.Println("=== KV Plugin with Capability Broker (fx Integration) ===")
 
 	app := fx.New(
 		// Provide broker with logger capability
@@ -104,7 +104,7 @@ func main() {
 					}
 					kvClient := raw.(kvv1connect.KVServiceClient)
 
-					log.Println("\n=== Testing KV operations ===\n")
+					log.Println("\n=== Testing KV operations ===")
 
 					// Put
 					log.Println("1. Put test/key...")

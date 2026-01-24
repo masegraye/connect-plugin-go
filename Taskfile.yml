@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  MODULE: github.com/example/connect-plugin-go
+  MODULE: github.com/masegraye/connect-plugin-go
 
 tasks:
   default:
@@ -14,9 +14,11 @@ tasks:
     cmds:
       - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
       - go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+      - go install ./cmd/protoc-gen-connect-plugin
     status:
       - which protoc-gen-go
       - which protoc-gen-connect-go
+      - which protoc-gen-connect-plugin
 
   proto:
     desc: Generate protobuf code for core and examples
@@ -38,6 +40,8 @@ tasks:
           --go_opt=paths=source_relative
           --connect-go_out=examples/kv/gen
           --connect-go_opt=paths=source_relative
+          --connect-plugin_out=examples/kv/gen
+          --connect-plugin_opt=paths=source_relative
           examples/kv/proto/kv.proto
 
   tidy:

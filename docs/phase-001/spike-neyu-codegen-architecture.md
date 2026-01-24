@@ -239,7 +239,7 @@ package kvstoreconnect
 import (
     "context"
 
-    connectplugin "github.com/example/connect-plugin-go"
+    connectplugin "github.com/masegraye/connect-plugin-go"
     "google.golang.org/grpc"
 )
 
@@ -276,7 +276,7 @@ import (
 
     pb "github.com/example/gen/kvstore/v1"
     kvstore "github.com/example/app"
-    connectplugin "github.com/example/connect-plugin-go"
+    connectplugin "github.com/masegraye/connect-plugin-go"
     "connectrpc.com/connect"
 )
 
@@ -573,7 +573,7 @@ import (
     "fmt"
     "os"
 
-    "github.com/example/connect-plugin-go/gen"
+    "github.com/masegraye/connect-plugin-go/gen"
 )
 
 func main() {

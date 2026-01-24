@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package capability.logger.v1;
 
-option go_package = "github.com/example/connect-plugin-go/gen/capability/logger/v1;loggerv1";
+option go_package = "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1;loggerv1";
 
 // Logger is a host capability for structured logging.
 service Logger {

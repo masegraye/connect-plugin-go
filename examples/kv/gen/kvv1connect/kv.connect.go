@@ -8,7 +8,7 @@ import (
 	connect "connectrpc.com/connect"
 	context "context"
 	errors "errors"
-	gen "github.com/example/connect-plugin-go/examples/kv/gen"
+	gen "github.com/masegraye/connect-plugin-go/examples/kv/gen"
 	http "net/http"
 	strings "strings"
 )

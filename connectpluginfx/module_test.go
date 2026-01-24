@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	connectplugin "github.com/example/connect-plugin-go"
-	v1 "github.com/example/connect-plugin-go/gen/plugin/v1"
-	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	v1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
+	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 )

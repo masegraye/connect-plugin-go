@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
-	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
-	loggerv1 "github.com/example/connect-plugin-go/gen/capability/logger/v1"
-	"github.com/example/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
+	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
+	loggerv1 "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1"
+	"github.com/masegraye/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
 )
 
 // testLoggerCapability is a test logger capability.

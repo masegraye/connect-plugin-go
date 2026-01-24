@@ -6,12 +6,12 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
-	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
-	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
-	loggerv1 "github.com/example/connect-plugin-go/gen/capability/logger/v1"
-	"github.com/example/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
-	kvimpl "github.com/example/connect-plugin-go/examples/kv/impl"
-	kvv1 "github.com/example/connect-plugin-go/examples/kv/gen"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
+	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
+	loggerv1 "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1"
+	"github.com/masegraye/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
+	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
+	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
 )
 
 // StoreWithLogger wraps a KV store and logs operations via host logger capability.

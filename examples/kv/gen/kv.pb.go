@@ -485,7 +485,7 @@ const file_kv_proto_rawDesc = "" +
 	"\x03Get\x12\x11.kv.v1.GetRequest\x1a\x12.kv.v1.GetResponse\x12,\n" +
 	"\x03Put\x12\x11.kv.v1.PutRequest\x1a\x12.kv.v1.PutResponse\x125\n" +
 	"\x06Delete\x12\x14.kv.v1.DeleteRequest\x1a\x15.kv.v1.DeleteResponse\x121\n" +
-	"\x05Watch\x12\x13.kv.v1.WatchRequest\x1a\x11.kv.v1.WatchEvent0\x01B;Z9github.com/example/connect-plugin-go/examples/kv/gen;kvv1b\x06proto3"
+	"\x05Watch\x12\x13.kv.v1.WatchRequest\x1a\x11.kv.v1.WatchEvent0\x01B=Z;github.com/masegraye/connect-plugin-go/examples/kv/gen;kvv1b\x06proto3"
 
 var (
 	file_kv_proto_rawDescOnce sync.Once

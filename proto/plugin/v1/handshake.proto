@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package connectplugin.v1;
 
-option go_package = "github.com/example/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
 
 // HandshakeService handles protocol negotiation between client and server.
 service HandshakeService {

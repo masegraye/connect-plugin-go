@@ -7,9 +7,9 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
-	connectplugin "github.com/example/connect-plugin-go"
-	kvv1 "github.com/example/connect-plugin-go/examples/kv/gen"
-	"github.com/example/connect-plugin-go/examples/kv/gen/kvv1connect"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
+	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
 )
 
 // Compile-time check that Store implements KVServiceHandler

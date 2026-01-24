@@ -7,9 +7,9 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
-	connectplugin "github.com/example/connect-plugin-go"
-	loggerv1 "github.com/example/connect-plugin-go/gen/capability/logger/v1"
-	"github.com/example/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	loggerv1 "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1"
+	"github.com/masegraye/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
 )
 
 // LoggerCapability implements a simple logging capability for the host.

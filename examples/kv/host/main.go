@@ -6,12 +6,12 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
-	connectplugin "github.com/example/connect-plugin-go"
-	kvv1 "github.com/example/connect-plugin-go/examples/kv/gen"
-	"github.com/example/connect-plugin-go/examples/kv/gen/kvv1connect"
-	kvplugin "github.com/example/connect-plugin-go/examples/kv/plugin"
-	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
-	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
+	connectplugin "github.com/masegraye/connect-plugin-go"
+	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
+	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
+	kvplugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
+	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 )
 
 func main() {

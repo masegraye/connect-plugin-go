@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package kv.v1;
 
-option go_package = "github.com/example/connect-plugin-go/examples/kv/gen;kvv1";
+option go_package = "github.com/masegraye/connect-plugin-go/examples/kv/gen;kvv1";
 
 // KVService provides simple key-value storage.
 service KVService {

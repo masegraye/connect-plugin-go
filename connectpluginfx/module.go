@@ -3,7 +3,7 @@ package connectpluginfx
 import (
 	"context"
 
-	connectplugin "github.com/example/connect-plugin-go"
+	connectplugin "github.com/masegraye/connect-plugin-go"
 	"go.uber.org/fx"
 )
 
