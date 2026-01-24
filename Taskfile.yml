@@ -99,6 +99,7 @@ tasks:
       - go build -o dist/kv-server ./examples/kv/server
       - go build -o dist/kv-host ./examples/kv/host
       - go build -o dist/kv-host-watch ./examples/kv/host-watch
+      - go build -o dist/kv-integ-fx ./examples/kv/integ-fx
       - go build -o dist/integ-test ./cmd/integ-test
 
   # Manual example runners (for development)
