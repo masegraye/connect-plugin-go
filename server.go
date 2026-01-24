@@ -86,6 +86,11 @@ type ServeConfig struct {
 	// If set, PluginLifecycle service is registered and plugins can report health.
 	// Set to nil to disable Phase 2 lifecycle features.
 	LifecycleService *LifecycleServer
+
+	// ServiceRegistry manages plugin-to-plugin service discovery.
+	// If set, ServiceRegistry service is registered and plugins can register/discover services.
+	// Set to nil to disable Phase 2 service registry features.
+	ServiceRegistry *ServiceRegistry
 }
 
 // Validate checks ServeConfig for errors.
@@ -179,6 +184,12 @@ func Serve(cfg *ServeConfig) error {
 	if cfg.LifecycleService != nil {
 		lifecyclePath, lifecycleHandler := LifecycleServerHandler(cfg.LifecycleService)
 		mux.Handle(lifecyclePath, lifecycleHandler)
+	}
+
+	// Phase 2: Register service registry (if enabled)
+	if cfg.ServiceRegistry != nil {
+		registryPath, registryHandler := ServiceRegistryHandler(cfg.ServiceRegistry)
+		mux.Handle(registryPath, registryHandler)
 	}
 
 	// Register plugin services
