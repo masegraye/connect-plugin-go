@@ -95,40 +95,43 @@ tasks:
       - mkdir -p dist
       - go build -o dist/kv-server ./examples/kv/server
       - go build -o dist/kv-host ./examples/kv/host
+      - go build -o dist/kv-host-watch ./examples/kv/host-watch
       - go build -o dist/integ-test ./cmd/integ-test
 
-  example-server:
-    desc: Build and run KV plugin server
+  # Manual example runners (for development)
+  example:server:
+    desc: Run KV plugin server manually
     deps: [build-examples]
     cmds:
       - ./dist/kv-server
 
-  example-client:
-    desc: Run KV plugin client (requires server running)
+  example:client:
+    desc: Run KV client manually (requires server)
     deps: [build-examples]
     cmds:
       - ./dist/kv-host
 
-  # Integration tests
-  integ:kv:server:
-    desc: Run KV plugin server for integration testing
+  example:watch:
+    desc: Run KV Watch client manually (requires server)
     deps: [build-examples]
     cmds:
-      - ./dist/kv-server
+      - ./dist/kv-host-watch
 
-  integ:kv:client:
-    desc: Run KV plugin client (requires integ:kv:server running)
-    deps: [build-examples]
-    cmds:
-      - ./dist/kv-host
-
+  # Integration tests (automated with integ-test CLI)
   integ:kv:test:
-    desc: Integration test - run server and client together
+    desc: Integration test - basic CRUD
     deps: [build-examples]
     cmds:
-      - ./dist/integ-test kv --server=./dist/kv-server --client=./dist/kv-host
+      - ./dist/integ-test kv
+
+  integ:kv-watch:test:
+    desc: Integration test - Watch streaming
+    deps: [build-examples]
+    cmds:
+      - ./dist/integ-test kv-watch
 
   integ:all:
     desc: Run all integration tests
     cmds:
       - task: integ:kv:test
+      - task: integ:kv-watch:test

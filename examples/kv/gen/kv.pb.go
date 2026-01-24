@@ -21,6 +21,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type EventType int32
+
+const (
+	EventType_EVENT_TYPE_UNSPECIFIED EventType = 0
+	EventType_EVENT_TYPE_PUT         EventType = 1
+	EventType_EVENT_TYPE_DELETE      EventType = 2
+)
+
+// Enum value maps for EventType.
+var (
+	EventType_name = map[int32]string{
+		0: "EVENT_TYPE_UNSPECIFIED",
+		1: "EVENT_TYPE_PUT",
+		2: "EVENT_TYPE_DELETE",
+	}
+	EventType_value = map[string]int32{
+		"EVENT_TYPE_UNSPECIFIED": 0,
+		"EVENT_TYPE_PUT":         1,
+		"EVENT_TYPE_DELETE":      2,
+	}
+)
+
+func (x EventType) Enum() *EventType {
+	p := new(EventType)
+	*p = x
+	return p
+}
+
+func (x EventType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EventType) Descriptor() protoreflect.EnumDescriptor {
+	return file_kv_proto_enumTypes[0].Descriptor()
+}
+
+func (EventType) Type() protoreflect.EnumType {
+	return &file_kv_proto_enumTypes[0]
+}
+
+func (x EventType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EventType.Descriptor instead.
+func (EventType) EnumDescriptor() ([]byte, []int) {
+	return file_kv_proto_rawDescGZIP(), []int{0}
+}
+
 type GetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -293,6 +342,114 @@ func (x *DeleteResponse) GetFound() bool {
 	return false
 }
 
+type WatchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Key prefix to watch. Empty watches all keys.
+	Prefix        string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchRequest) Reset() {
+	*x = WatchRequest{}
+	mi := &file_kv_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchRequest) ProtoMessage() {}
+
+func (x *WatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
+func (*WatchRequest) Descriptor() ([]byte, []int) {
+	return file_kv_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *WatchRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+type WatchEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Type of change (put or delete).
+	Type EventType `protobuf:"varint,1,opt,name=type,proto3,enum=kv.v1.EventType" json:"type,omitempty"`
+	// The key that changed.
+	Key string `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	// The new value (only for PUT events).
+	Value         []byte `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchEvent) Reset() {
+	*x = WatchEvent{}
+	mi := &file_kv_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchEvent) ProtoMessage() {}
+
+func (x *WatchEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_kv_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchEvent.ProtoReflect.Descriptor instead.
+func (*WatchEvent) Descriptor() ([]byte, []int) {
+	return file_kv_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *WatchEvent) GetType() EventType {
+	if x != nil {
+		return x.Type
+	}
+	return EventType_EVENT_TYPE_UNSPECIFIED
+}
+
+func (x *WatchEvent) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *WatchEvent) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
 var File_kv_proto protoreflect.FileDescriptor
 
 const file_kv_proto_rawDesc = "" +
@@ -312,11 +469,23 @@ const file_kv_proto_rawDesc = "" +
 	"\rDeleteRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"&\n" +
 	"\x0eDeleteResponse\x12\x14\n" +
-	"\x05found\x18\x02 \x01(\bR\x05found2\x9e\x01\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\"&\n" +
+	"\fWatchRequest\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"Z\n" +
+	"\n" +
+	"WatchEvent\x12$\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x10.kv.v1.EventTypeR\x04type\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value*R\n" +
+	"\tEventType\x12\x1a\n" +
+	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eEVENT_TYPE_PUT\x10\x01\x12\x15\n" +
+	"\x11EVENT_TYPE_DELETE\x10\x022\xd1\x01\n" +
 	"\tKVService\x12,\n" +
 	"\x03Get\x12\x11.kv.v1.GetRequest\x1a\x12.kv.v1.GetResponse\x12,\n" +
 	"\x03Put\x12\x11.kv.v1.PutRequest\x1a\x12.kv.v1.PutResponse\x125\n" +
-	"\x06Delete\x12\x14.kv.v1.DeleteRequest\x1a\x15.kv.v1.DeleteResponseB;Z9github.com/example/connect-plugin-go/examples/kv/gen;kvv1b\x06proto3"
+	"\x06Delete\x12\x14.kv.v1.DeleteRequest\x1a\x15.kv.v1.DeleteResponse\x121\n" +
+	"\x05Watch\x12\x13.kv.v1.WatchRequest\x1a\x11.kv.v1.WatchEvent0\x01B;Z9github.com/example/connect-plugin-go/examples/kv/gen;kvv1b\x06proto3"
 
 var (
 	file_kv_proto_rawDescOnce sync.Once
@@ -330,27 +499,34 @@ func file_kv_proto_rawDescGZIP() []byte {
 	return file_kv_proto_rawDescData
 }
 
-var file_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_kv_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_kv_proto_goTypes = []any{
-	(*GetRequest)(nil),     // 0: kv.v1.GetRequest
-	(*GetResponse)(nil),    // 1: kv.v1.GetResponse
-	(*PutRequest)(nil),     // 2: kv.v1.PutRequest
-	(*PutResponse)(nil),    // 3: kv.v1.PutResponse
-	(*DeleteRequest)(nil),  // 4: kv.v1.DeleteRequest
-	(*DeleteResponse)(nil), // 5: kv.v1.DeleteResponse
+	(EventType)(0),         // 0: kv.v1.EventType
+	(*GetRequest)(nil),     // 1: kv.v1.GetRequest
+	(*GetResponse)(nil),    // 2: kv.v1.GetResponse
+	(*PutRequest)(nil),     // 3: kv.v1.PutRequest
+	(*PutResponse)(nil),    // 4: kv.v1.PutResponse
+	(*DeleteRequest)(nil),  // 5: kv.v1.DeleteRequest
+	(*DeleteResponse)(nil), // 6: kv.v1.DeleteResponse
+	(*WatchRequest)(nil),   // 7: kv.v1.WatchRequest
+	(*WatchEvent)(nil),     // 8: kv.v1.WatchEvent
 }
 var file_kv_proto_depIdxs = []int32{
-	0, // 0: kv.v1.KVService.Get:input_type -> kv.v1.GetRequest
-	2, // 1: kv.v1.KVService.Put:input_type -> kv.v1.PutRequest
-	4, // 2: kv.v1.KVService.Delete:input_type -> kv.v1.DeleteRequest
-	1, // 3: kv.v1.KVService.Get:output_type -> kv.v1.GetResponse
-	3, // 4: kv.v1.KVService.Put:output_type -> kv.v1.PutResponse
-	5, // 5: kv.v1.KVService.Delete:output_type -> kv.v1.DeleteResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: kv.v1.WatchEvent.type:type_name -> kv.v1.EventType
+	1, // 1: kv.v1.KVService.Get:input_type -> kv.v1.GetRequest
+	3, // 2: kv.v1.KVService.Put:input_type -> kv.v1.PutRequest
+	5, // 3: kv.v1.KVService.Delete:input_type -> kv.v1.DeleteRequest
+	7, // 4: kv.v1.KVService.Watch:input_type -> kv.v1.WatchRequest
+	2, // 5: kv.v1.KVService.Get:output_type -> kv.v1.GetResponse
+	4, // 6: kv.v1.KVService.Put:output_type -> kv.v1.PutResponse
+	6, // 7: kv.v1.KVService.Delete:output_type -> kv.v1.DeleteResponse
+	8, // 8: kv.v1.KVService.Watch:output_type -> kv.v1.WatchEvent
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_kv_proto_init() }
@@ -363,13 +539,14 @@ func file_kv_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kv_proto_rawDesc), len(file_kv_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   6,
+			NumEnums:      1,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_kv_proto_goTypes,
 		DependencyIndexes: file_kv_proto_depIdxs,
+		EnumInfos:         file_kv_proto_enumTypes,
 		MessageInfos:      file_kv_proto_msgTypes,
 	}.Build()
 	File_kv_proto = out.File

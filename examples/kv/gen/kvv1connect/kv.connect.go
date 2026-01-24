@@ -39,6 +39,8 @@ const (
 	KVServicePutProcedure = "/kv.v1.KVService/Put"
 	// KVServiceDeleteProcedure is the fully-qualified name of the KVService's Delete RPC.
 	KVServiceDeleteProcedure = "/kv.v1.KVService/Delete"
+	// KVServiceWatchProcedure is the fully-qualified name of the KVService's Watch RPC.
+	KVServiceWatchProcedure = "/kv.v1.KVService/Watch"
 )
 
 // KVServiceClient is a client for the kv.v1.KVService service.
@@ -49,6 +51,8 @@ type KVServiceClient interface {
 	Put(context.Context, *connect.Request[gen.PutRequest]) (*connect.Response[gen.PutResponse], error)
 	// Delete removes a key.
 	Delete(context.Context, *connect.Request[gen.DeleteRequest]) (*connect.Response[gen.DeleteResponse], error)
+	// Watch streams changes to keys with the given prefix.
+	Watch(context.Context, *connect.Request[gen.WatchRequest]) (*connect.ServerStreamForClient[gen.WatchEvent], error)
 }
 
 // NewKVServiceClient constructs a client for the kv.v1.KVService service. By default, it uses the
@@ -80,6 +84,12 @@ func NewKVServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...c
 			connect.WithSchema(kVServiceMethods.ByName("Delete")),
 			connect.WithClientOptions(opts...),
 		),
+		watch: connect.NewClient[gen.WatchRequest, gen.WatchEvent](
+			httpClient,
+			baseURL+KVServiceWatchProcedure,
+			connect.WithSchema(kVServiceMethods.ByName("Watch")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -88,6 +98,7 @@ type kVServiceClient struct {
 	get    *connect.Client[gen.GetRequest, gen.GetResponse]
 	put    *connect.Client[gen.PutRequest, gen.PutResponse]
 	delete *connect.Client[gen.DeleteRequest, gen.DeleteResponse]
+	watch  *connect.Client[gen.WatchRequest, gen.WatchEvent]
 }
 
 // Get calls kv.v1.KVService.Get.
@@ -105,6 +116,11 @@ func (c *kVServiceClient) Delete(ctx context.Context, req *connect.Request[gen.D
 	return c.delete.CallUnary(ctx, req)
 }
 
+// Watch calls kv.v1.KVService.Watch.
+func (c *kVServiceClient) Watch(ctx context.Context, req *connect.Request[gen.WatchRequest]) (*connect.ServerStreamForClient[gen.WatchEvent], error) {
+	return c.watch.CallServerStream(ctx, req)
+}
+
 // KVServiceHandler is an implementation of the kv.v1.KVService service.
 type KVServiceHandler interface {
 	// Get retrieves a value by key.
@@ -113,6 +129,8 @@ type KVServiceHandler interface {
 	Put(context.Context, *connect.Request[gen.PutRequest]) (*connect.Response[gen.PutResponse], error)
 	// Delete removes a key.
 	Delete(context.Context, *connect.Request[gen.DeleteRequest]) (*connect.Response[gen.DeleteResponse], error)
+	// Watch streams changes to keys with the given prefix.
+	Watch(context.Context, *connect.Request[gen.WatchRequest], *connect.ServerStream[gen.WatchEvent]) error
 }
 
 // NewKVServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -140,6 +158,12 @@ func NewKVServiceHandler(svc KVServiceHandler, opts ...connect.HandlerOption) (s
 		connect.WithSchema(kVServiceMethods.ByName("Delete")),
 		connect.WithHandlerOptions(opts...),
 	)
+	kVServiceWatchHandler := connect.NewServerStreamHandler(
+		KVServiceWatchProcedure,
+		svc.Watch,
+		connect.WithSchema(kVServiceMethods.ByName("Watch")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kv.v1.KVService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case KVServiceGetProcedure:
@@ -148,6 +172,8 @@ func NewKVServiceHandler(svc KVServiceHandler, opts ...connect.HandlerOption) (s
 			kVServicePutHandler.ServeHTTP(w, r)
 		case KVServiceDeleteProcedure:
 			kVServiceDeleteHandler.ServeHTTP(w, r)
+		case KVServiceWatchProcedure:
+			kVServiceWatchHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -167,4 +193,8 @@ func (UnimplementedKVServiceHandler) Put(context.Context, *connect.Request[gen.P
 
 func (UnimplementedKVServiceHandler) Delete(context.Context, *connect.Request[gen.DeleteRequest]) (*connect.Response[gen.DeleteResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kv.v1.KVService.Delete is not implemented"))
+}
+
+func (UnimplementedKVServiceHandler) Watch(context.Context, *connect.Request[gen.WatchRequest], *connect.ServerStream[gen.WatchEvent]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("kv.v1.KVService.Watch is not implemented"))
 }
