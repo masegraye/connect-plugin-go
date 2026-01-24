@@ -2,8 +2,12 @@ package connectplugin
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 
 	"connectrpc.com/connect"
 	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
@@ -21,11 +25,18 @@ const (
 // HandshakeServer implements the handshake protocol server.
 type HandshakeServer struct {
 	cfg *ServeConfig
+
+	// Phase 2: Token storage for runtime identity
+	mu     sync.RWMutex
+	tokens map[string]string // runtime_id → token
 }
 
 // NewHandshakeServer creates a new handshake server for the given configuration.
 func NewHandshakeServer(cfg *ServeConfig) *HandshakeServer {
-	return &HandshakeServer{cfg: cfg}
+	return &HandshakeServer{
+		cfg:    cfg,
+		tokens: make(map[string]string),
+	}
 }
 
 // Handshake implements the handshake RPC.
@@ -69,6 +80,19 @@ func (h *HandshakeServer) Handshake(
 		)
 	}
 
+	// Phase 2: Generate runtime identity
+	var runtimeID, runtimeToken string
+	if req.Msg.SelfId != "" {
+		// Plugin provided self_id - generate runtime identity
+		runtimeID = generateRuntimeID(req.Msg.SelfId)
+		runtimeToken = generateToken()
+
+		// Store token for later validation
+		h.mu.Lock()
+		h.tokens[runtimeID] = runtimeToken
+		h.mu.Unlock()
+	}
+
 	// Build plugin info for requested plugins
 	plugins := make([]*connectpluginv1.PluginInfo, 0, len(req.Msg.RequestedPlugins))
 	for _, requestedName := range req.Msg.RequestedPlugins {
@@ -79,11 +103,39 @@ func (h *HandshakeServer) Handshake(
 		}
 
 		metadata := plugin.Metadata()
-		plugins = append(plugins, &connectpluginv1.PluginInfo{
+		pluginInfo := &connectpluginv1.PluginInfo{
 			Name:        metadata.Name,
 			Version:     metadata.Version,
 			ServicePath: metadata.Path,
-		})
+		}
+
+		// Phase 2: Add service declarations
+		if len(metadata.Provides) > 0 {
+			provides := make([]*connectpluginv1.ServiceDeclaration, len(metadata.Provides))
+			for i, svc := range metadata.Provides {
+				provides[i] = &connectpluginv1.ServiceDeclaration{
+					Type:    svc.Type,
+					Version: svc.Version,
+					Path:    svc.Path,
+				}
+			}
+			pluginInfo.Provides = provides
+		}
+
+		if len(metadata.Requires) > 0 {
+			requires := make([]*connectpluginv1.ServiceDependency, len(metadata.Requires))
+			for i, dep := range metadata.Requires {
+				requires[i] = &connectpluginv1.ServiceDependency{
+					Type:                dep.Type,
+					MinVersion:          dep.MinVersion,
+					RequiredForStartup:  dep.RequiredForStartup,
+					WatchForChanges:     dep.WatchForChanges,
+				}
+			}
+			pluginInfo.Requires = requires
+		}
+
+		plugins = append(plugins, pluginInfo)
 	}
 
 	// Build server metadata
@@ -101,16 +153,62 @@ func (h *HandshakeServer) Handshake(
 		hostCapabilities = h.cfg.CapabilityBroker.ListCapabilities()
 	}
 
-	return connect.NewResponse(&connectpluginv1.HandshakeResponse{
+	resp := &connectpluginv1.HandshakeResponse{
 		CoreProtocolVersion: 1,
 		AppProtocolVersion:  int32(serverVersion),
 		Plugins:             plugins,
 		ServerMetadata:      serverMetadata,
 		HostCapabilities:    hostCapabilities,
-	}), nil
+	}
+
+	// Phase 2: Include runtime identity if generated
+	if runtimeID != "" {
+		resp.RuntimeId = runtimeID
+		resp.RuntimeToken = runtimeToken
+	}
+
+	return connect.NewResponse(resp), nil
 }
 
 // HandshakeServerHandler returns the path and handler for the handshake service.
 func HandshakeServerHandler(server *HandshakeServer) (string, http.Handler) {
 	return connectpluginv1connect.NewHandshakeServiceHandler(server)
+}
+
+// ValidateToken validates a runtime token for the given runtime ID.
+// Returns true if the token is valid.
+func (h *HandshakeServer) ValidateToken(runtimeID, token string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	expectedToken, ok := h.tokens[runtimeID]
+	if !ok {
+		return false
+	}
+
+	return expectedToken == token
+}
+
+// generateRuntimeID generates a unique runtime ID from the plugin's self-declared ID.
+// Format: {self_id}-{random_suffix}
+// Example: "cache-plugin" → "cache-plugin-x7k2"
+func generateRuntimeID(selfID string) string {
+	// Generate 4-character random suffix
+	suffix := generateRandomHex(4)
+
+	// Normalize self_id (lowercase, replace spaces with hyphens)
+	normalized := strings.ToLower(strings.ReplaceAll(selfID, " ", "-"))
+
+	return fmt.Sprintf("%s-%s", normalized, suffix)
+}
+
+// generateRandomHex generates a cryptographically secure random hex string.
+func generateRandomHex(length int) string {
+	bytes := make([]byte, (length+1)/2)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fall back to a less secure but still random method
+		// This should never happen in practice
+		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+	}
+	return hex.EncodeToString(bytes)[:length]
 }

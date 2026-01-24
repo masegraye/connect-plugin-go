@@ -40,6 +40,39 @@ type PluginMetadata struct {
 
 	// Version is the plugin's semantic version (e.g., "1.0.0").
 	Version string
+
+	// Phase 2: Services this plugin provides.
+	Provides []ServiceDeclaration
+
+	// Phase 2: Services this plugin requires.
+	Requires []ServiceDependency
+}
+
+// ServiceDeclaration describes a service this plugin provides.
+type ServiceDeclaration struct {
+	// Service type (e.g., "logger", "cache", "metrics").
+	Type string
+
+	// Service version (semver).
+	Version string
+
+	// Service endpoint path (relative to plugin base URL).
+	Path string
+}
+
+// ServiceDependency describes a service this plugin requires.
+type ServiceDependency struct {
+	// Service type required (e.g., "logger", "cache").
+	Type string
+
+	// Minimum version required (semver).
+	MinVersion string
+
+	// Block startup if this service is unavailable?
+	RequiredForStartup bool
+
+	// Should host send WatchService events for this dependency?
+	WatchForChanges bool
 }
 
 // PluginSet is a map of plugin names to Plugin implementations.

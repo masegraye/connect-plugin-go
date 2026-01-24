@@ -30,6 +30,15 @@ type ClientConfig struct {
 	// Default: DefaultMagicCookieKey/Value
 	MagicCookieKey   string
 	MagicCookieValue string
+
+	// Phase 2: SelfID is the plugin's self-declared identity.
+	// Optional. If provided, host will assign a runtime_id.
+	// Example: "cache-plugin", "my-app"
+	SelfID string
+
+	// Phase 2: SelfVersion is the plugin's self-declared version.
+	// Optional. Used for debugging/logging.
+	SelfVersion string
 }
 
 // Validate checks ClientConfig for errors.
@@ -63,6 +72,10 @@ type Client struct {
 
 	// HTTP client for Connect RPCs (created on Connect)
 	httpClient connect.HTTPClient
+
+	// Phase 2: Runtime identity assigned by host
+	runtimeID    string
+	runtimeToken string
 }
 
 // NewClient creates a new plugin client with the given configuration.
@@ -142,6 +155,12 @@ func (c *Client) doHandshake(ctx context.Context) error {
 		},
 	}
 
+	// Phase 2: Include self-identity if provided
+	if c.cfg.SelfID != "" {
+		req.SelfId = c.cfg.SelfID
+		req.SelfVersion = c.cfg.SelfVersion
+	}
+
 	// Call handshake
 	resp, err := handshakeClient.Handshake(ctx, connect.NewRequest(req))
 	if err != nil {
@@ -168,6 +187,12 @@ func (c *Client) doHandshake(ctx context.Context) error {
 		if _, ok := availablePlugins[requested]; !ok {
 			return fmt.Errorf("requested plugin %q not available on server", requested)
 		}
+	}
+
+	// Phase 2: Store runtime identity if assigned
+	if resp.Msg.RuntimeId != "" {
+		c.runtimeID = resp.Msg.RuntimeId
+		c.runtimeToken = resp.Msg.RuntimeToken
 	}
 
 	return nil
@@ -197,6 +222,22 @@ func (c *Client) Dispense(name string) (any, error) {
 
 	// Create client instance
 	return plugin.ConnectClient(c.cfg.Endpoint, c.httpClient)
+}
+
+// RuntimeID returns the host-assigned runtime ID for this client.
+// Returns empty string if no runtime ID was assigned (Phase 1 mode).
+func (c *Client) RuntimeID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.runtimeID
+}
+
+// RuntimeToken returns the host-assigned runtime token for authentication.
+// Returns empty string if no runtime token was assigned (Phase 1 mode).
+func (c *Client) RuntimeToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.runtimeToken
 }
 
 // Close closes the client and releases resources.
