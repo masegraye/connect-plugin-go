@@ -347,6 +347,22 @@ func (r *ServiceRegistry) GetServicesBy(runtimeID string) []*ServiceProvider {
 	return services
 }
 
+// GetAllProviders returns all providers for a given service type.
+// Does not filter by version or health.
+func (r *ServiceRegistry) GetAllProviders(serviceType string) []*ServiceProvider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	providers, ok := r.providers[serviceType]
+	if !ok {
+		return nil
+	}
+
+	result := make([]*ServiceProvider, len(providers))
+	copy(result, providers)
+	return result
+}
+
 // DiscoverService implements the discovery RPC (part of KOR-sbgi).
 // Returns a single host-selected endpoint.
 func (r *ServiceRegistry) DiscoverService(

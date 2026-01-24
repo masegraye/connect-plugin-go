@@ -18,8 +18,12 @@ type ClientConfig struct {
 	// Required. Examples: "http://localhost:8080", "https://plugin.example.com"
 	Endpoint string
 
+	// HostURL is an alias for Endpoint (Phase 2 naming).
+	// If both are provided, Endpoint takes precedence.
+	HostURL string
+
 	// Plugins defines available plugin types.
-	// Required. Maps plugin name to Plugin implementation.
+	// Required for Phase 1. Optional for Phase 2 (service providers).
 	Plugins PluginSet
 
 	// ProtocolVersion is the application protocol version.
@@ -39,25 +43,30 @@ type ClientConfig struct {
 	// Phase 2: SelfVersion is the plugin's self-declared version.
 	// Optional. Used for debugging/logging.
 	SelfVersion string
+
+	// Phase 2: Metadata describes services this plugin provides/requires.
+	// Optional. Used for service registration and dependency declaration.
+	Metadata PluginMetadata
 }
 
 // Validate checks ClientConfig for errors.
 func (cfg *ClientConfig) Validate() error {
+	// Accept either Endpoint or HostURL
+	if cfg.Endpoint == "" && cfg.HostURL == "" {
+		return fmt.Errorf("%w: Endpoint or HostURL is required", ErrInvalidConfig)
+	}
+
+	// Normalize: use HostURL if Endpoint is empty
 	if cfg.Endpoint == "" {
-		return fmt.Errorf("%w: Endpoint is required", ErrInvalidConfig)
+		cfg.Endpoint = cfg.HostURL
 	}
 
-	if cfg.Plugins == nil {
-		return fmt.Errorf("%w: Plugins is required", ErrInvalidConfig)
-	}
-
-	if len(cfg.Plugins) == 0 {
-		return fmt.Errorf("%w: Plugins must contain at least one plugin", ErrInvalidConfig)
-	}
-
-	// Validate the plugin set
-	if err := cfg.Plugins.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	// Phase 2: Plugins is optional (service providers don't need to dispense plugins)
+	if cfg.Plugins != nil && len(cfg.Plugins) > 0 {
+		// Validate the plugin set if provided
+		if err := cfg.Plugins.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
 	}
 
 	return nil
@@ -79,6 +88,9 @@ type Client struct {
 
 	// Phase 2: Lifecycle client for reporting health
 	lifecycleClient connectpluginv1connect.PluginLifecycleClient
+
+	// Phase 2: Registry client for service discovery
+	registryClient connectpluginv1connect.ServiceRegistryClient
 }
 
 // NewClient creates a new plugin client with the given configuration.
@@ -202,6 +214,12 @@ func (c *Client) doHandshake(ctx context.Context) error {
 			c.httpClient,
 			c.cfg.Endpoint,
 		)
+
+		// Initialize registry client for service discovery
+		c.registryClient = connectpluginv1connect.NewServiceRegistryClient(
+			c.httpClient,
+			c.cfg.Endpoint,
+		)
 	}
 
 	return nil
@@ -247,6 +265,22 @@ func (c *Client) RuntimeToken() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.runtimeToken
+}
+
+// RegistryClient returns the service registry client for discovering services.
+// This is a Phase 2 feature - returns nil if runtime identity was not assigned.
+func (c *Client) RegistryClient() connectpluginv1connect.ServiceRegistryClient {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.registryClient
+}
+
+// Config returns the client configuration.
+// This allows plugins to access their own metadata.
+func (c *Client) Config() ClientConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg
 }
 
 // ReportHealth reports the plugin's health state to the host.

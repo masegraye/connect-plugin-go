@@ -250,6 +250,40 @@ func (p *Platform) GetStartupOrder() ([]string, error) {
 	return p.depGraph.StartupOrder()
 }
 
+// AddToDependencyGraph manually adds a plugin to the dependency graph.
+// This is useful for testing or when plugins self-register without going through AddPlugin().
+func (p *Platform) AddToDependencyGraph(
+	runtimeID string,
+	selfID string,
+	provides []ServiceDeclaration,
+	requires []ServiceDependency,
+) {
+	node := &depgraph.Node{
+		RuntimeID: runtimeID,
+		SelfID:    selfID,
+		Provides:  make([]depgraph.ServiceDeclaration, 0, len(provides)),
+		Requires:  make([]depgraph.ServiceDependency, 0, len(requires)),
+	}
+
+	for _, svc := range provides {
+		node.Provides = append(node.Provides, depgraph.ServiceDeclaration{
+			Type:    svc.Type,
+			Version: svc.Version,
+		})
+	}
+
+	for _, dep := range requires {
+		node.Requires = append(node.Requires, depgraph.ServiceDependency{
+			Type:               dep.Type,
+			MinVersion:         dep.MinVersion,
+			RequiredForStartup: dep.RequiredForStartup,
+			WatchForChanges:    dep.WatchForChanges,
+		})
+	}
+
+	p.depGraph.Add(node)
+}
+
 // waitForHealthy waits for a plugin to report healthy state.
 func (p *Platform) waitForHealthy(ctx context.Context, runtimeID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

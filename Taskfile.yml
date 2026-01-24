@@ -59,10 +59,22 @@ tasks:
       - go mod tidy
 
   test:
-    desc: Run tests
+    desc: Run unit tests (excludes integration tests)
     deps: [proto]
     cmds:
-      - go test -v ./...
+      - go test -v -short ./...
+
+  test:integration:
+    desc: Run Phase 2 integration tests with real plugin processes
+    deps: [build-examples]
+    cmds:
+      - go test -v -run TestIntegration_ -timeout 60s
+
+  test:all:
+    desc: Run all tests (unit + integration)
+    deps: [build-examples]
+    cmds:
+      - go test -v -timeout 60s ./...
 
   test:coverage:
     desc: Run tests with coverage
@@ -95,6 +107,9 @@ tasks:
       - rm -rf gen
       - rm -rf examples/kv/gen
       - rm -rf dist
+      - rm -f examples/logger-plugin/logger-plugin
+      - rm -f examples/cache-plugin/cache-plugin
+      - rm -f examples/app-plugin/app-plugin
       - go clean ./...
 
   build-examples:
@@ -107,6 +122,9 @@ tasks:
       - go build -o dist/kv-host-watch ./examples/kv/host-watch
       - go build -o dist/kv-integ-fx ./examples/kv/integ-fx
       - go build -o dist/integ-test ./cmd/integ-test
+      - go build -o dist/logger-plugin ./examples/logger-plugin
+      - go build -o dist/cache-plugin ./examples/cache-plugin
+      - go build -o dist/app-plugin ./examples/app-plugin
 
   # Manual example runners (for development)
   example:server:

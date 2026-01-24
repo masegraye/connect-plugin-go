@@ -34,19 +34,26 @@ func TestClientConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "missing plugins",
+			name: "missing plugins (OK for Phase 2 service providers)",
 			cfg: ClientConfig{
 				Endpoint: "http://localhost:8080",
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
-			name: "empty plugins",
+			name: "empty plugins (OK for Phase 2)",
 			cfg: ClientConfig{
 				Endpoint: "http://localhost:8080",
 				Plugins:  PluginSet{},
 			},
-			wantErr: true,
+			wantErr: false,
+		},
+		{
+			name: "hosturl instead of endpoint",
+			cfg: ClientConfig{
+				HostURL: "http://localhost:8080",
+			},
+			wantErr: false,
 		},
 	}
 
