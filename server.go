@@ -79,6 +79,13 @@ type ServeConfig struct {
 	// If set, broker service is registered and capabilities are advertised in handshake.
 	// Set to nil to disable capability support.
 	CapabilityBroker *CapabilityBroker
+
+	// ===== Phase 2: Lifecycle =====
+
+	// LifecycleService manages plugin health state reporting.
+	// If set, PluginLifecycle service is registered and plugins can report health.
+	// Set to nil to disable Phase 2 lifecycle features.
+	LifecycleService *LifecycleServer
 }
 
 // Validate checks ServeConfig for errors.
@@ -166,6 +173,12 @@ func Serve(cfg *ServeConfig) error {
 		httpHealthHandler := HTTPHealthHandler(cfg.HealthService)
 		mux.Handle("/healthz", httpHealthHandler)
 		mux.Handle("/readyz", httpHealthHandler)
+	}
+
+	// Phase 2: Register lifecycle service (if enabled)
+	if cfg.LifecycleService != nil {
+		lifecyclePath, lifecycleHandler := LifecycleServerHandler(cfg.LifecycleService)
+		mux.Handle(lifecyclePath, lifecycleHandler)
 	}
 
 	// Register plugin services

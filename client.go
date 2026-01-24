@@ -76,6 +76,9 @@ type Client struct {
 	// Phase 2: Runtime identity assigned by host
 	runtimeID    string
 	runtimeToken string
+
+	// Phase 2: Lifecycle client for reporting health
+	lifecycleClient connectpluginv1connect.PluginLifecycleClient
 }
 
 // NewClient creates a new plugin client with the given configuration.
@@ -193,6 +196,12 @@ func (c *Client) doHandshake(ctx context.Context) error {
 	if resp.Msg.RuntimeId != "" {
 		c.runtimeID = resp.Msg.RuntimeId
 		c.runtimeToken = resp.Msg.RuntimeToken
+
+		// Initialize lifecycle client for health reporting
+		c.lifecycleClient = connectpluginv1connect.NewPluginLifecycleClient(
+			c.httpClient,
+			c.cfg.Endpoint,
+		)
 	}
 
 	return nil
@@ -238,6 +247,34 @@ func (c *Client) RuntimeToken() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.runtimeToken
+}
+
+// ReportHealth reports the plugin's health state to the host.
+// This is a Phase 2 feature - only works if runtime identity was assigned.
+func (c *Client) ReportHealth(ctx context.Context, state connectpluginv1.HealthState, reason string, unavailableDeps []string) error {
+	c.mu.RLock()
+	lifecycleClient := c.lifecycleClient
+	runtimeID := c.runtimeID
+	runtimeToken := c.runtimeToken
+	c.mu.RUnlock()
+
+	if lifecycleClient == nil {
+		return fmt.Errorf("ReportHealth requires Phase 2 runtime identity (provide SelfID in ClientConfig)")
+	}
+
+	// Create request with runtime identity in headers
+	req := connect.NewRequest(&connectpluginv1.ReportHealthRequest{
+		State:                   state,
+		Reason:                  reason,
+		UnavailableDependencies: unavailableDeps,
+	})
+
+	// Add runtime identity headers
+	req.Header().Set("X-Plugin-Runtime-ID", runtimeID)
+	req.Header().Set("Authorization", "Bearer "+runtimeToken)
+
+	_, err := lifecycleClient.ReportHealth(ctx, req)
+	return err
 }
 
 // Close closes the client and releases resources.
