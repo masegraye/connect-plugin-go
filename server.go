@@ -104,9 +104,9 @@ func (cfg *ServeConfig) Validate() error {
 		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 	}
 
-	// Validate protocol version
-	if cfg.ProtocolVersion < 1 {
-		return fmt.Errorf("%w: ProtocolVersion must be >= 1", ErrInvalidConfig)
+	// Protocol version 0 is allowed (defaults to 1)
+	if cfg.ProtocolVersion < 0 {
+		return fmt.Errorf("%w: ProtocolVersion cannot be negative", ErrInvalidConfig)
 	}
 
 	return nil
