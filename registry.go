@@ -49,6 +49,16 @@ type ServiceRegistry struct {
 
 	// lifecycleServer for checking provider health
 	lifecycleServer *LifecycleServer
+
+	// watchers tracks clients watching service types
+	watchers map[string][]*serviceWatcher
+}
+
+// serviceWatcher represents a client watching a service type.
+type serviceWatcher struct {
+	ch     chan *connectpluginv1.WatchServiceEvent
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // ServiceProvider represents a registered service provider.
@@ -70,6 +80,7 @@ func NewServiceRegistry(lifecycle *LifecycleServer) *ServiceRegistry {
 		selection:       make(map[string]SelectionStrategy),
 		roundRobinIndex: make(map[string]int),
 		lifecycleServer: lifecycle,
+		watchers:        make(map[string][]*serviceWatcher),
 	}
 }
 
@@ -116,6 +127,9 @@ func (r *ServiceRegistry) RegisterService(
 	// Store registration for unregister lookup
 	r.registrations[registrationID] = provider
 
+	// Notify watchers that service is now available
+	r.notifyWatchersLocked(req.Msg.ServiceType)
+
 	return connect.NewResponse(&connectpluginv1.RegisterServiceResponse{
 		RegistrationId: registrationID,
 	}), nil
@@ -150,6 +164,9 @@ func (r *ServiceRegistry) UnregisterService(
 
 	// Remove from registrations map
 	delete(r.registrations, req.Msg.RegistrationId)
+
+	// Notify watchers about service state change
+	r.notifyWatchersLocked(serviceType)
 
 	return connect.NewResponse(&connectpluginv1.UnregisterServiceResponse{}), nil
 }
@@ -361,27 +378,117 @@ func (r *ServiceRegistry) DiscoverService(
 	}), nil
 }
 
-// WatchService implements the watch RPC (part of KOR-sbgi).
-// Streams service availability updates.
+// WatchService implements the watch RPC.
+// Streams service availability updates when providers register/unregister.
 func (r *ServiceRegistry) WatchService(
 	ctx context.Context,
 	req *connect.Request[connectpluginv1.WatchServiceRequest],
 	stream *connect.ServerStream[connectpluginv1.WatchServiceEvent],
 ) error {
-	// TODO: Implement in KOR-sbgi
-	// For now, send initial state and close
 	serviceType := req.Msg.ServiceType
 
-	provider, err := r.SelectProvider(serviceType, "")
-	if err != nil {
-		// Service not available
-		return stream.Send(&connectpluginv1.WatchServiceEvent{
-			ServiceType: serviceType,
-			State:       connectpluginv1.ServiceState_SERVICE_STATE_UNAVAILABLE,
-		})
+	r.mu.Lock()
+
+	// Create watcher
+	wctx, cancel := context.WithCancel(ctx)
+	watcher := &serviceWatcher{
+		ch:     make(chan *connectpluginv1.WatchServiceEvent, 10),
+		ctx:    wctx,
+		cancel: cancel,
 	}
 
-	// Send initial AVAILABLE event
+	// Register watcher
+	r.watchers[serviceType] = append(r.watchers[serviceType], watcher)
+
+	// Send initial state
+	initialEvent := r.buildServiceEventLocked(serviceType)
+	watcher.ch <- initialEvent
+
+	r.mu.Unlock()
+
+	// Cleanup on exit
+	defer func() {
+		r.mu.Lock()
+		watchers := r.watchers[serviceType]
+		for i, w := range watchers {
+			if w == watcher {
+				r.watchers[serviceType] = append(watchers[:i], watchers[i+1:]...)
+				break
+			}
+		}
+		r.mu.Unlock()
+		cancel()
+		close(watcher.ch)
+	}()
+
+	// Stream events
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case event, ok := <-watcher.ch:
+			if !ok {
+				return nil
+			}
+
+			if err := stream.Send(event); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// notifyWatchersLocked notifies all watchers of a service type about state changes.
+// Caller must hold lock.
+func (r *ServiceRegistry) notifyWatchersLocked(serviceType string) {
+	event := r.buildServiceEventLocked(serviceType)
+
+	for _, watcher := range r.watchers[serviceType] {
+		select {
+		case watcher.ch <- event:
+		default:
+			// Watcher not reading, skip
+		}
+	}
+}
+
+// buildServiceEventLocked builds a WatchServiceEvent for the current state of a service.
+// Caller must hold lock.
+func (r *ServiceRegistry) buildServiceEventLocked(serviceType string) *connectpluginv1.WatchServiceEvent {
+	// Try to select a provider
+	providers := r.providers[serviceType]
+	if len(providers) == 0 {
+		// No providers - service unavailable
+		return &connectpluginv1.WatchServiceEvent{
+			ServiceType: serviceType,
+			State:       connectpluginv1.ServiceState_SERVICE_STATE_UNAVAILABLE,
+		}
+	}
+
+	// Filter by health
+	available := r.filterAvailable(providers)
+	if len(available) == 0 {
+		// All providers unhealthy
+		return &connectpluginv1.WatchServiceEvent{
+			ServiceType: serviceType,
+			State:       connectpluginv1.ServiceState_SERVICE_STATE_UNAVAILABLE,
+		}
+	}
+
+	// Get first available provider
+	provider := available[0]
+
+	// Check if provider is degraded
+	state := connectpluginv1.ServiceState_SERVICE_STATE_AVAILABLE
+	if r.lifecycleServer != nil {
+		healthState := r.lifecycleServer.GetHealthState(provider.RuntimeID)
+		if healthState != nil && healthState.State == connectpluginv1.HealthState_HEALTH_STATE_DEGRADED {
+			state = connectpluginv1.ServiceState_SERVICE_STATE_DEGRADED
+		}
+	}
+
+	// Build endpoint
 	endpoint := &connectpluginv1.ServiceEndpoint{
 		ProviderId:  provider.RuntimeID,
 		Version:     provider.Version,
@@ -389,11 +496,11 @@ func (r *ServiceRegistry) WatchService(
 		Metadata:    provider.Metadata,
 	}
 
-	return stream.Send(&connectpluginv1.WatchServiceEvent{
+	return &connectpluginv1.WatchServiceEvent{
 		ServiceType: serviceType,
-		State:       connectpluginv1.ServiceState_SERVICE_STATE_AVAILABLE,
+		State:       state,
 		Endpoint:    endpoint,
-	})
+	}
 }
 
 // ServiceRegistryHandler returns the path and handler for the registry service.

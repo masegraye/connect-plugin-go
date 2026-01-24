@@ -3,6 +3,7 @@ package connectplugin
 import (
 	"context"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
@@ -279,5 +280,107 @@ func TestServiceRegistry_MissingRuntimeID(t *testing.T) {
 	_, err := registry.RegisterService(context.Background(), req)
 	if err == nil {
 		t.Error("Expected error when X-Plugin-Runtime-ID header missing")
+	}
+}
+
+func TestDiscoverService_SingleEndpoint(t *testing.T) {
+	registry := NewServiceRegistry(nil)
+
+	// Register 2 logger providers
+	for i, runtimeID := range []string{"logger-a", "logger-b"} {
+		req := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
+			ServiceType:  "logger",
+			Version:      "1.0.0",
+			EndpointPath: "/logger.v1.Logger/",
+			Metadata:     map[string]string{"index": string(rune('0' + i))},
+		})
+		req.Header().Set("X-Plugin-Runtime-ID", runtimeID)
+		registry.RegisterService(context.Background(), req)
+	}
+
+	// Discover logger (host selects one)
+	discReq := connect.NewRequest(&connectpluginv1.DiscoverServiceRequest{
+		ServiceType: "logger",
+		MinVersion:  "1.0.0",
+	})
+
+	resp, err := registry.DiscoverService(context.Background(), discReq)
+	if err != nil {
+		t.Fatalf("DiscoverService failed: %v", err)
+	}
+
+	// Should return single endpoint (not list)
+	if resp.Msg.Endpoint == nil {
+		t.Fatal("Expected single endpoint")
+	}
+
+	// Should indicate multiple providers available
+	if resp.Msg.SingleProvider {
+		t.Error("Expected SingleProvider=false when multiple exist")
+	}
+
+	// Provider should be one of the registered ones
+	providerID := resp.Msg.Endpoint.ProviderId
+	if providerID != "logger-a" && providerID != "logger-b" {
+		t.Errorf("Expected logger-a or logger-b, got %s", providerID)
+	}
+
+	// Endpoint should be routed through host
+	expectedPrefix := "/services/logger/"
+	if len(resp.Msg.Endpoint.EndpointUrl) < len(expectedPrefix) ||
+		resp.Msg.Endpoint.EndpointUrl[:len(expectedPrefix)] != expectedPrefix {
+		t.Errorf("Expected endpoint to start with %s, got %s", expectedPrefix, resp.Msg.Endpoint.EndpointUrl)
+	}
+}
+
+func TestDiscoverService_ServiceNotFound(t *testing.T) {
+	registry := NewServiceRegistry(nil)
+
+	// Discover non-existent service
+	req := connect.NewRequest(&connectpluginv1.DiscoverServiceRequest{
+		ServiceType: "missing",
+		MinVersion:  "1.0.0",
+	})
+
+	_, err := registry.DiscoverService(context.Background(), req)
+	if err == nil {
+		t.Error("Expected error when service not found")
+	}
+
+	// Should be NotFound error
+	if connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("Expected NotFound code, got %v", connect.CodeOf(err))
+	}
+}
+
+func TestRegistry_WatcherNotification(t *testing.T) {
+	registry := NewServiceRegistry(nil)
+
+	// Manually create a watcher to test notification mechanism
+	watcher := &serviceWatcher{
+		ch: make(chan *connectpluginv1.WatchServiceEvent, 10),
+	}
+
+	registry.mu.Lock()
+	registry.watchers["test-service"] = []*serviceWatcher{watcher}
+	registry.mu.Unlock()
+
+	// Register a provider (should trigger notification)
+	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
+		ServiceType:  "test-service",
+		Version:      "1.0.0",
+		EndpointPath: "/test.v1.Test/",
+	})
+	regReq.Header().Set("X-Plugin-Runtime-ID", "test-xyz")
+	registry.RegisterService(context.Background(), regReq)
+
+	// Watcher should receive event
+	select {
+	case event := <-watcher.ch:
+		if event.State != connectpluginv1.ServiceState_SERVICE_STATE_AVAILABLE {
+			t.Errorf("Expected AVAILABLE notification, got %v", event.State)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Watcher not notified of registration")
 	}
 }
