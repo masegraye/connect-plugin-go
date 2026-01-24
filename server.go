@@ -91,6 +91,11 @@ type ServeConfig struct {
 	// If set, ServiceRegistry service is registered and plugins can register/discover services.
 	// Set to nil to disable Phase 2 service registry features.
 	ServiceRegistry *ServiceRegistry
+
+	// ServiceRouter routes plugin-to-plugin calls through the host.
+	// If set, /services/* routes are handled for mediated communication.
+	// Set to nil to disable Phase 2 service routing.
+	ServiceRouter *ServiceRouter
 }
 
 // Validate checks ServeConfig for errors.
@@ -190,6 +195,11 @@ func Serve(cfg *ServeConfig) error {
 	if cfg.ServiceRegistry != nil {
 		registryPath, registryHandler := ServiceRegistryHandler(cfg.ServiceRegistry)
 		mux.Handle(registryPath, registryHandler)
+	}
+
+	// Phase 2: Register service router (if enabled)
+	if cfg.ServiceRouter != nil {
+		mux.Handle("/services/", cfg.ServiceRouter)
 	}
 
 	// Register plugin services
