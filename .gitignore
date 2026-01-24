@@ -44,3 +44,7 @@ go.work.sum
 # Generated proto code
 gen/
 examples/*/gen/
+
+# Example plugin binaries (should be in dist/ only)
+examples/*-plugin/*-plugin
+examples/*-plugin/examples/
