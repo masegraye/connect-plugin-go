@@ -13,6 +13,7 @@ dist/
 server
 kv-server
 kv-host
+integ-test
 
 # Test binary, built with `go test -c`
 *.test

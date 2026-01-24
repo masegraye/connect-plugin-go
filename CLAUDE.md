@@ -67,17 +67,20 @@ task example-client
 
 ### Integration Tests
 
+Integration tests use the `integ-test` CLI tool (built with cobra/viper) to manage server and client processes with proper cleanup.
+
 Run automated integration tests (server + client together):
 
 ```bash
-task integ:kv:test
+task integ:kv:test    # Run KV integration test
+task integ:all        # Run all integration tests
 ```
 
-Run all integration tests:
-
-```bash
-task integ:all
-```
+**How it works:**
+- Starts server as subprocess
+- Waits for server to be ready (TCP + HTTP check)
+- Runs client
+- Ensures server is killed on completion (even on failure)
 
 Run server and client separately for manual testing:
 
@@ -85,6 +88,8 @@ Run server and client separately for manual testing:
 task integ:kv:server  # Terminal 1
 task integ:kv:client  # Terminal 2
 ```
+
+**Note:** Integration tests use `dist/integ-test` binary (cobra CLI) for process management, ensuring no leaked server processes.
 
 ### Run Tests
 

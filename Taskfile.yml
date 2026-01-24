@@ -85,6 +85,7 @@ tasks:
       - mkdir -p dist
       - go build -o dist/kv-server ./examples/kv/server
       - go build -o dist/kv-host ./examples/kv/host
+      - go build -o dist/integ-test ./cmd/integ-test
 
   example-server:
     desc: Build and run KV plugin server
@@ -115,23 +116,7 @@ tasks:
     desc: Integration test - run server and client together
     deps: [build-examples]
     cmds:
-      - |
-        # Start server in background
-        ./dist/kv-server &
-        SERVER_PID=$!
-
-        # Wait for server to start
-        sleep 1
-
-        # Run client
-        ./dist/kv-host
-        CLIENT_EXIT=$?
-
-        # Kill server
-        kill $SERVER_PID 2>/dev/null || true
-
-        # Exit with client's exit code
-        exit $CLIENT_EXIT
+      - ./dist/integ-test kv --server=./dist/kv-server --client=./dist/kv-host
 
   integ:all:
     desc: Run all integration tests
