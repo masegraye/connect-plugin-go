@@ -72,6 +72,13 @@ type ServeConfig struct {
 	// If set, health service and HTTP endpoints are registered.
 	// Set to nil to disable health checking.
 	HealthService *HealthServer
+
+	// ===== Capabilities =====
+
+	// CapabilityBroker manages host capabilities for plugins.
+	// If set, broker service is registered and capabilities are advertised in handshake.
+	// Set to nil to disable capability support.
+	CapabilityBroker *CapabilityBroker
 }
 
 // Validate checks ServeConfig for errors.
@@ -134,6 +141,13 @@ func Serve(cfg *ServeConfig) error {
 	// Build the HTTP mux
 	mux := http.NewServeMux()
 
+	// Register capability broker (if enabled)
+	if cfg.CapabilityBroker != nil {
+		brokerHandler := cfg.CapabilityBroker.Handler()
+		mux.Handle("/broker/", brokerHandler)
+		mux.Handle("/capabilities/", brokerHandler)
+	}
+
 	// Register handshake service (always enabled for v1)
 	handshakeServer := NewHandshakeServer(cfg)
 	handshakePath, handshakeHandler := HandshakeServerHandler(handshakeServer)
@@ -173,8 +187,6 @@ func Serve(cfg *ServeConfig) error {
 			cfg.HealthService.SetServingStatus(name, connectpluginv1.ServingStatus_SERVING_STATUS_SERVING)
 		}
 	}
-
-	// TODO: Register capability broker (if len(cfg.HostCapabilities) > 0)
 
 	// Create HTTP server
 	srv := &http.Server{

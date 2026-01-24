@@ -45,6 +45,9 @@ message HandshakeResponse {
 
   // Server metadata (version, etc).
   map<string, string> server_metadata = 4;
+
+  // Host capabilities available to plugins.
+  repeated Capability host_capabilities = 5;
 }
 
 message PluginInfo {
@@ -56,4 +59,15 @@ message PluginInfo {
 
   // Service path this plugin is served at.
   string service_path = 3;
+}
+
+message Capability {
+  // Capability type (e.g., "logger", "metrics", "secrets").
+  string type = 1;
+
+  // Capability version (semver).
+  string version = 2;
+
+  // Endpoint URL for requesting this capability.
+  string endpoint = 3;
 }

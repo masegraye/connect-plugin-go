@@ -95,11 +95,18 @@ func (h *HandshakeServer) Handshake(
 		}
 	}
 
+	// Get host capabilities from broker (if enabled)
+	var hostCapabilities []*connectpluginv1.Capability
+	if h.cfg.CapabilityBroker != nil {
+		hostCapabilities = h.cfg.CapabilityBroker.ListCapabilities()
+	}
+
 	return connect.NewResponse(&connectpluginv1.HandshakeResponse{
 		CoreProtocolVersion: 1,
 		AppProtocolVersion:  int32(serverVersion),
 		Plugins:             plugins,
 		ServerMetadata:      serverMetadata,
+		HostCapabilities:    hostCapabilities,
 	}), nil
 }
 
