@@ -94,6 +94,8 @@ func (s *Store) Delete(ctx context.Context, req *connect.Request[kvv1.DeleteRequ
 // Watch streams changes to keys with the given prefix.
 // Uses PumpToStream adapter for channel-based streaming (design-uxvj).
 func (s *Store) Watch(ctx context.Context, req *connect.Request[kvv1.WatchRequest], stream *connect.ServerStream[kvv1.WatchEvent]) error {
+	fmt.Printf("[Store.Watch] Starting watch for prefix: %q\n", req.Msg.Prefix)
+
 	events := make(chan kvv1.WatchEvent, 32)
 	errs := make(chan error, 1)
 
@@ -106,7 +108,17 @@ func (s *Store) Watch(ctx context.Context, req *connect.Request[kvv1.WatchReques
 
 	s.mu.Lock()
 	s.watchers = append(s.watchers, w)
+	fmt.Printf("[Store.Watch] Registered watcher (total: %d)\n", len(s.watchers))
 	s.mu.Unlock()
+
+	// Send initial event to unblock client (demonstrates stream is working)
+	// This isn't a real event, just shows the stream started
+	select {
+	case events <- kvv1.WatchEvent{Type: kvv1.EventType_EVENT_TYPE_UNSPECIFIED, Key: "_watch_started"}:
+		fmt.Printf("[Store.Watch] Sent initial watch_started event\n")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	// Cleanup on exit
 	defer func() {
@@ -117,10 +129,12 @@ func (s *Store) Watch(ctx context.Context, req *connect.Request[kvv1.WatchReques
 				break
 			}
 		}
+		fmt.Printf("[Store.Watch] Unregistered watcher (remaining: %d)\n", len(s.watchers))
 		s.mu.Unlock()
 		close(events)
 	}()
 
+	fmt.Printf("[Store.Watch] Starting PumpToStream...\n")
 	// Stream events using adapter
 	return connectplugin.PumpToStream(ctx, events, errs, stream)
 }
