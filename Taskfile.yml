@@ -76,3 +76,15 @@ tasks:
       - rm -f coverage.out coverage.html
       - rm -rf examples/kv/gen
       - go clean ./...
+
+  example-server:
+    desc: Build and run KV plugin server
+    deps: [build]
+    cmds:
+      - go run ./examples/kv/server
+
+  example-client:
+    desc: Run KV plugin client (requires server running)
+    deps: [build]
+    cmds:
+      - go run ./examples/kv/host
