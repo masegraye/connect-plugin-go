@@ -75,16 +75,25 @@ tasks:
     cmds:
       - rm -f coverage.out coverage.html
       - rm -rf examples/kv/gen
+      - rm -rf dist
       - go clean ./...
+
+  build-examples:
+    desc: Build example binaries to dist/
+    deps: [proto]
+    cmds:
+      - mkdir -p dist
+      - go build -o dist/kv-server ./examples/kv/server
+      - go build -o dist/kv-host ./examples/kv/host
 
   example-server:
     desc: Build and run KV plugin server
-    deps: [build]
+    deps: [build-examples]
     cmds:
-      - go run ./examples/kv/server
+      - ./dist/kv-server
 
   example-client:
     desc: Run KV plugin client (requires server running)
-    deps: [build]
+    deps: [build-examples]
     cmds:
-      - go run ./examples/kv/host
+      - ./dist/kv-host

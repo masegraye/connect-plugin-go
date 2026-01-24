@@ -8,6 +8,12 @@
 *.so
 *.dylib
 
+# Built binaries
+dist/
+server
+kv-server
+kv-host
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -33,3 +39,6 @@ go.work.sum
 
 # FP local tracking
 .fp/
+
+# Generated proto code
+examples/*/gen/
