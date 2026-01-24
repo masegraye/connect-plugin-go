@@ -34,6 +34,8 @@ tasks:
           proto/plugin/v1/handshake.proto
           proto/plugin/v1/health.proto
           proto/plugin/v1/broker.proto
+          proto/plugin/v1/registry.proto
+          proto/plugin/v1/lifecycle.proto
           proto/capability/logger/v1/logger.proto
       - protoc --proto_path=examples/kv/proto
           --go_out=examples/kv/gen

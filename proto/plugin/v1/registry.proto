@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package connectplugin.v1;
+
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+
+// ServiceRegistry manages plugin-to-plugin service discovery.
+// Plugins register services they provide, and discover services they need.
+// All service calls are routed through the host for observability and control.
+service ServiceRegistry {
+  // RegisterService registers a service this plugin provides.
+  // Called by plugins during startup.
+  rpc RegisterService(RegisterServiceRequest) returns (RegisterServiceResponse);
+
+  // UnregisterService removes a service registration.
+  // Called during shutdown or if plugin becomes unavailable.
+  rpc UnregisterService(UnregisterServiceRequest) returns (UnregisterServiceResponse);
+
+  // DiscoverService finds the provider for a service type.
+  // Host selects the provider - returns single endpoint.
+  rpc DiscoverService(DiscoverServiceRequest) returns (DiscoverServiceResponse);
+
+  // WatchService streams service availability updates.
+  // Plugins subscribe to be notified when services come online, go offline, or change state.
+  rpc WatchService(WatchServiceRequest) returns (stream WatchServiceEvent);
+}
+
+message RegisterServiceRequest {
+  // Service type (e.g., "logger", "cache").
+  string service_type = 1;
+
+  // Service version (semver).
+  string version = 2;
+
+  // Service endpoint path (relative to plugin base).
+  // e.g., "/logger.v1.Logger/"
+  string endpoint_path = 3;
+
+  // Service metadata (optional).
+  map<string, string> metadata = 4;
+}
+
+message RegisterServiceResponse {
+  // Registration ID for this service.
+  // Use this to unregister later.
+  string registration_id = 1;
+}
+
+message UnregisterServiceRequest {
+  // Registration ID returned from RegisterService.
+  string registration_id = 1;
+}
+
+message UnregisterServiceResponse {}
+
+message DiscoverServiceRequest {
+  // Service type to discover (e.g., "logger").
+  string service_type = 1;
+
+  // Minimum version required (semver).
+  string min_version = 2;
+}
+
+message DiscoverServiceResponse {
+  // Single endpoint - host has already selected provider.
+  ServiceEndpoint endpoint = 1;
+
+  // True if this is the only provider (informational).
+  bool single_provider = 2;
+}
+
+message ServiceEndpoint {
+  // Provider plugin runtime ID.
+  string provider_id = 1;
+
+  // Service version.
+  string version = 2;
+
+  // Endpoint URL (routes through host).
+  // e.g., "/services/logger/logger-a-x7k2"
+  // Plugin calls: hostURL + endpoint_url + "/MethodName"
+  string endpoint_url = 3;
+
+  // Service metadata.
+  map<string, string> metadata = 4;
+}
+
+message WatchServiceRequest {
+  // Service type to watch (e.g., "logger").
+  string service_type = 1;
+}
+
+message WatchServiceEvent {
+  // Service type.
+  string service_type = 1;
+
+  // Current state of the service.
+  ServiceState state = 2;
+
+  // If state is AVAILABLE or DEGRADED, this is the endpoint to use.
+  ServiceEndpoint endpoint = 3;
+}
+
+enum ServiceState {
+  SERVICE_STATE_UNSPECIFIED = 0;
+
+  // Service is available and healthy.
+  SERVICE_STATE_AVAILABLE = 1;
+
+  // Service is not available (no providers).
+  SERVICE_STATE_UNAVAILABLE = 2;
+
+  // Service is available but degraded.
+  SERVICE_STATE_DEGRADED = 3;
+}

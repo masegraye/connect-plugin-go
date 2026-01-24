@@ -31,6 +31,13 @@ message HandshakeRequest {
 
   // Client metadata (for debugging/logging).
   map<string, string> client_metadata = 6;
+
+  // NEW Phase 2: Plugin's self-declared identity.
+  // This is the plugin's notion of its own name (e.g., "cache-plugin").
+  string self_id = 10;
+
+  // NEW Phase 2: Plugin's self-declared version.
+  string self_version = 11;
 }
 
 message HandshakeResponse {
@@ -48,6 +55,14 @@ message HandshakeResponse {
 
   // Host capabilities available to plugins.
   repeated Capability host_capabilities = 5;
+
+  // NEW Phase 2: Host-assigned runtime identity.
+  // This is globally unique and opaque to the plugin.
+  string runtime_id = 10;
+
+  // NEW Phase 2: Token for authenticating calls to host.
+  // Plugin includes this in Authorization header for all host API calls.
+  string runtime_token = 11;
 }
 
 message PluginInfo {
@@ -59,6 +74,12 @@ message PluginInfo {
 
   // Service path this plugin is served at.
   string service_path = 3;
+
+  // NEW Phase 2: Services this plugin provides.
+  repeated ServiceDeclaration provides = 10;
+
+  // NEW Phase 2: Services this plugin requires.
+  repeated ServiceDependency requires = 11;
 }
 
 message Capability {
@@ -70,4 +91,32 @@ message Capability {
 
   // Endpoint URL for requesting this capability.
   string endpoint = 3;
+}
+
+// NEW Phase 2: Service declaration (what a plugin provides).
+message ServiceDeclaration {
+  // Service type (e.g., "logger", "cache", "metrics").
+  string type = 1;
+
+  // Service version (semver).
+  string version = 2;
+
+  // Service endpoint path (relative to plugin base URL).
+  // e.g., "/logger.v1.Logger/"
+  string path = 3;
+}
+
+// NEW Phase 2: Service dependency (what a plugin requires).
+message ServiceDependency {
+  // Service type required (e.g., "logger", "cache").
+  string type = 1;
+
+  // Minimum version required (semver).
+  string min_version = 2;
+
+  // Block startup if this service is unavailable?
+  bool required_for_startup = 3;
+
+  // Should host send WatchService events for this dependency?
+  bool watch_for_changes = 4;
 }

@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package connectplugin.v1;
+
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+
+// PluginLifecycle is implemented by the HOST.
+// Plugins call these methods to report their state.
+service PluginLifecycle {
+  // ReportHealth allows plugin to report its health state to the host.
+  // Host uses this to decide whether to route traffic to the plugin.
+  rpc ReportHealth(ReportHealthRequest) returns (ReportHealthResponse);
+}
+
+// PluginControl is implemented by PLUGINS.
+// Host calls these methods to manage plugin lifecycle.
+service PluginControl {
+  // GetHealth checks plugin's current health state.
+  // Host calls this periodically or on-demand.
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+
+  // Shutdown requests graceful shutdown.
+  // Plugin should stop accepting new requests, finish in-flight work, and exit.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message ReportHealthRequest {
+  // Current health state.
+  HealthState state = 1;
+
+  // Human-readable reason for the state (e.g., "logger dependency unavailable").
+  string reason = 2;
+
+  // List of dependency service types currently unavailable.
+  repeated string unavailable_dependencies = 3;
+}
+
+message ReportHealthResponse {}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  // Current health state.
+  HealthState state = 1;
+
+  // Human-readable reason for the state.
+  string reason = 2;
+
+  // List of dependency service types currently unavailable.
+  repeated string unavailable_dependencies = 3;
+}
+
+message ShutdownRequest {
+  // Grace period in seconds before forceful termination.
+  int32 grace_period_seconds = 1;
+
+  // Reason for shutdown (e.g., "host shutting down", "plugin replacement").
+  string reason = 2;
+}
+
+message ShutdownResponse {
+  // True if shutdown request acknowledged.
+  bool acknowledged = 1;
+}
+
+// HealthState represents the operational state of a plugin.
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+
+  // Plugin is fully functional and ready to serve requests.
+  // Traffic will be routed normally.
+  HEALTH_STATE_HEALTHY = 1;
+
+  // Plugin is functional but with limitations (e.g., dependency unavailable, using fallback).
+  // Traffic will still be routed, but plugin may return degraded responses.
+  HEALTH_STATE_DEGRADED = 2;
+
+  // Plugin cannot serve requests.
+  // Traffic will NOT be routed to this plugin.
+  HEALTH_STATE_UNHEALTHY = 3;
+}
