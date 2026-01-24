@@ -19,10 +19,17 @@ tasks:
       - which protoc-gen-connect-go
 
   proto:
-    desc: Generate protobuf code for examples
+    desc: Generate protobuf code for core and examples
     deps: [install-deps]
     cmds:
+      - mkdir -p gen/connectplugin/v1
       - mkdir -p examples/kv/gen/kv/v1
+      - protoc --proto_path=proto
+          --go_out=gen
+          --go_opt=paths=source_relative
+          --connect-go_out=gen
+          --connect-go_opt=paths=source_relative
+          proto/plugin/v1/handshake.proto
       - protoc --proto_path=examples/kv/proto
           --go_out=examples/kv/gen
           --go_opt=paths=source_relative
@@ -37,9 +44,10 @@ tasks:
 
   build:
     desc: Build the library
-    deps: [proto, tidy]
+    deps: [proto]
     cmds:
       - go build ./...
+      - go mod tidy
 
   test:
     desc: Run tests
@@ -74,6 +82,7 @@ tasks:
     desc: Clean build artifacts
     cmds:
       - rm -f coverage.out coverage.html
+      - rm -rf gen
       - rm -rf examples/kv/gen
       - rm -rf dist
       - go clean ./...

@@ -29,6 +29,15 @@ type ServeConfig struct {
 	// Default: 1
 	ProtocolVersion int
 
+	// MagicCookieKey and Value for validation (not security).
+	// Must match client's expectation.
+	// Default: DefaultMagicCookieKey/Value
+	MagicCookieKey   string
+	MagicCookieValue string
+
+	// ServerMetadata is custom metadata sent in handshake.
+	ServerMetadata map[string]string
+
 	// ===== Server Configuration =====
 
 	// Addr is the address to listen on.
@@ -116,6 +125,11 @@ func Serve(cfg *ServeConfig) error {
 	// Build the HTTP mux
 	mux := http.NewServeMux()
 
+	// Register handshake service (always enabled for v1)
+	handshakeServer := NewHandshakeServer(cfg)
+	handshakePath, handshakeHandler := HandshakeServerHandler(handshakeServer)
+	mux.Handle(handshakePath, handshakeHandler)
+
 	// Register plugin services
 	for name, plugin := range cfg.Plugins {
 		impl, ok := cfg.Impls[name]
@@ -131,7 +145,6 @@ func Serve(cfg *ServeConfig) error {
 		mux.Handle(path, handler)
 	}
 
-	// TODO: Register handshake service (if cfg.HandshakeService != nil)
 	// TODO: Register health service (if cfg.HealthService != nil)
 	// TODO: Register capability broker (if len(cfg.HostCapabilities) > 0)
 

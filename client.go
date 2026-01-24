@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
+	connectpluginv1 "github.com/example/connect-plugin-go/gen/plugin/v1"
+	"github.com/example/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 )
 
 // ClientConfig is the minimal configuration required to create a plugin client.
@@ -19,6 +21,15 @@ type ClientConfig struct {
 	// Plugins defines available plugin types.
 	// Required. Maps plugin name to Plugin implementation.
 	Plugins PluginSet
+
+	// ProtocolVersion is the application protocol version.
+	// Default: 1
+	ProtocolVersion int
+
+	// MagicCookieKey and Value for validation (not security).
+	// Default: DefaultMagicCookieKey/Value
+	MagicCookieKey   string
+	MagicCookieValue string
 }
 
 // Validate checks ClientConfig for errors.
@@ -86,11 +97,79 @@ func (c *Client) Connect(ctx context.Context) error {
 	// TODO: Add TLS, timeouts, interceptors from ClientOptions
 	c.httpClient = &http.Client{}
 
-	// TODO: Perform handshake
+	// Perform handshake
+	if err := c.doHandshake(ctx); err != nil {
+		return fmt.Errorf("handshake failed: %w", err)
+	}
+
 	// TODO: Start health monitoring if configured
 	// TODO: Start endpoint watcher if using discovery
 
 	c.connected = true
+	return nil
+}
+
+// doHandshake performs the handshake protocol with the server.
+func (c *Client) doHandshake(ctx context.Context) error {
+	// Create handshake client
+	handshakeClient := connectpluginv1connect.NewHandshakeServiceClient(
+		c.httpClient,
+		c.cfg.Endpoint,
+	)
+
+	// Set defaults
+	protocolVersion := c.cfg.ProtocolVersion
+	if protocolVersion == 0 {
+		protocolVersion = 1
+	}
+
+	magicKey := c.cfg.MagicCookieKey
+	magicValue := c.cfg.MagicCookieValue
+	if magicKey == "" {
+		magicKey = DefaultMagicCookieKey
+		magicValue = DefaultMagicCookieValue
+	}
+
+	// Build handshake request
+	req := &connectpluginv1.HandshakeRequest{
+		CoreProtocolVersion: 1,
+		AppProtocolVersion:  int32(protocolVersion),
+		MagicCookieKey:      magicKey,
+		MagicCookieValue:    magicValue,
+		RequestedPlugins:    c.cfg.Plugins.Keys(),
+		ClientMetadata: map[string]string{
+			"client_version": "0.1.0", // TODO: Get from build version
+		},
+	}
+
+	// Call handshake
+	resp, err := handshakeClient.Handshake(ctx, connect.NewRequest(req))
+	if err != nil {
+		return err
+	}
+
+	// Validate response
+	if resp.Msg.CoreProtocolVersion != 1 {
+		return fmt.Errorf("core protocol version mismatch: got %d, want 1", resp.Msg.CoreProtocolVersion)
+	}
+
+	if resp.Msg.AppProtocolVersion != int32(protocolVersion) {
+		return fmt.Errorf("app protocol version mismatch: got %d, want %d",
+			resp.Msg.AppProtocolVersion, protocolVersion)
+	}
+
+	// Validate requested plugins are available
+	availablePlugins := make(map[string]*connectpluginv1.PluginInfo)
+	for _, p := range resp.Msg.Plugins {
+		availablePlugins[p.Name] = p
+	}
+
+	for _, requested := range c.cfg.Plugins.Keys() {
+		if _, ok := availablePlugins[requested]; !ok {
+			return fmt.Errorf("requested plugin %q not available on server", requested)
+		}
+	}
+
 	return nil
 }
 
