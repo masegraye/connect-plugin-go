@@ -164,3 +164,26 @@ tasks:
     cmds:
       - task: integ:kv:test
       - task: integ:kv-watch:test
+
+  # Documentation tasks
+  docs:serve:
+    desc: Serve documentation locally with MkDocs
+    cmds:
+      - mkdocs serve
+
+  docs:build:
+    desc: Build documentation static site
+    cmds:
+      - mkdocs build
+
+  docs:deploy:
+    desc: Deploy documentation to GitHub Pages
+    cmds:
+      - mkdocs gh-deploy
+
+  docs:install:
+    desc: Install MkDocs and dependencies
+    cmds:
+      - pip install -r requirements.txt
+    status:
+      - which mkdocs
