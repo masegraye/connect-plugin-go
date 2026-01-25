@@ -7,16 +7,33 @@ Complete docker-compose example demonstrating **Model B (self-registering)** dep
 ```bash
 cd examples/docker-compose
 
-# Start all services
-docker-compose up --build
+# 1. Build all images
+./setup.sh
 
-# In another terminal - shorten a URL
+# 2. Start all services
+./run.sh
+
+# 3. Test the URL shortener
+./test.sh
+
+# 4. Stop and cleanup
+./cleanup.sh
+```
+
+### Manual Commands
+
+```bash
+# Build images
+docker-compose build
+
+# Start services
+docker-compose up -d
+
+# Test manually
 docker-compose run --rm client shorten https://github.com/masegraye/connect-plugin-go
-
-# Resolve the short code
 docker-compose run --rm client resolve <code-from-above>
 
-# Stop all services
+# Stop services
 docker-compose down
 ```
 
