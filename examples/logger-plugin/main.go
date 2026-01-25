@@ -82,8 +82,14 @@ func main() {
 	identityPath, identityH := connectpluginv1connect.NewPluginIdentityHandler(identityHandler)
 	mux.Handle(identityPath, identityH)
 
-	// Simple logger service endpoint (dummy implementation)
+	// Logger service endpoint
 	mux.HandleFunc("/logger.v1.Logger/Log", func(w http.ResponseWriter, r *http.Request) {
+		message := r.URL.Query().Get("message")
+		if message == "" {
+			log.Printf("Log called with no message")
+		} else {
+			log.Printf("[LOG] %s", message)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"success": true}`))

@@ -52,6 +52,7 @@ func (r *ServiceRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	pathRemainder := strings.TrimPrefix(req.URL.Path, "/services/")
 	parts := strings.SplitN(pathRemainder, "/", 3)
 	if len(parts) < 3 {
+		log.Printf("[ROUTER] Invalid path: %s (parts: %d)", req.URL.Path, len(parts))
 		http.Error(w, "invalid service path format, expected /services/{type}/{provider-id}/{method}", http.StatusBadRequest)
 		return
 	}
@@ -63,6 +64,7 @@ func (r *ServiceRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Extract caller identity from headers
 	callerID := req.Header.Get("X-Plugin-Runtime-ID")
 	if callerID == "" {
+		log.Printf("[ROUTER] Missing X-Plugin-Runtime-ID header for %s", req.URL.Path)
 		http.Error(w, "X-Plugin-Runtime-ID header required", http.StatusUnauthorized)
 		return
 	}
@@ -70,6 +72,7 @@ func (r *ServiceRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Extract and validate token
 	authHeader := req.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
+		log.Printf("[ROUTER] Missing/invalid Authorization header for %s (caller: %s)", req.URL.Path, callerID)
 		http.Error(w, "Authorization: Bearer <token> required", http.StatusUnauthorized)
 		return
 	}
@@ -77,6 +80,7 @@ func (r *ServiceRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// Validate token
 	if !r.handshakeServer.ValidateToken(callerID, token) {
+		log.Printf("[ROUTER] Invalid token for caller: %s", callerID)
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}

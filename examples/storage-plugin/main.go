@@ -6,8 +6,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -173,16 +175,31 @@ func (s *storageService) logOperation(ctx context.Context, message string) {
 		return
 	}
 
+	// Construct URL with properly encoded query parameters
 	logURL := fmt.Sprintf("%s%s/Log?message=%s",
 		s.client.Config().HostURL,
 		discResp.Msg.Endpoint.EndpointUrl,
-		message)
+		url.QueryEscape(message))
+
+	log.Printf("Calling logger at: %s", logURL)
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", logURL, nil)
 	req.Header.Set("X-Plugin-Runtime-ID", s.client.RuntimeID())
 	req.Header.Set("Authorization", "Bearer "+s.client.RuntimeToken())
 
-	http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to call logger: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Logger returned non-OK status: %d, body: %s", resp.StatusCode, string(body))
+	} else {
+		log.Printf("Successfully logged: %s", message)
+	}
 }
 
 func registerServices(ctx context.Context, client *connectplugin.Client) {
