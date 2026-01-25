@@ -47,18 +47,32 @@ type ClientConfig struct {
 	// Phase 2: Metadata describes services this plugin provides/requires.
 	// Optional. Used for service registration and dependency declaration.
 	Metadata PluginMetadata
+
+	// Discovery is an optional service for dynamic endpoint discovery.
+	// If provided, Endpoint/HostURL is discovered via Discovery.Discover("plugin-host").
+	// If not provided, Endpoint/HostURL is used directly.
+	Discovery DiscoveryService
+
+	// DiscoveryServiceName is the service name to discover if Discovery is provided.
+	// Defaults to "plugin-host" if not specified.
+	DiscoveryServiceName string
 }
 
 // Validate checks ClientConfig for errors.
 func (cfg *ClientConfig) Validate() error {
-	// Accept either Endpoint or HostURL
-	if cfg.Endpoint == "" && cfg.HostURL == "" {
-		return fmt.Errorf("%w: Endpoint or HostURL is required", ErrInvalidConfig)
+	// Accept either: Endpoint/HostURL OR Discovery
+	if cfg.Endpoint == "" && cfg.HostURL == "" && cfg.Discovery == nil {
+		return fmt.Errorf("%w: Endpoint, HostURL, or Discovery is required", ErrInvalidConfig)
 	}
 
-	// Normalize: use HostURL if Endpoint is empty
-	if cfg.Endpoint == "" {
+	// Normalize: use HostURL if Endpoint is empty (and no Discovery)
+	if cfg.Endpoint == "" && cfg.HostURL != "" {
 		cfg.Endpoint = cfg.HostURL
+	}
+
+	// Set default discovery service name
+	if cfg.Discovery != nil && cfg.DiscoveryServiceName == "" {
+		cfg.DiscoveryServiceName = "plugin-host"
 	}
 
 	// Phase 2: Plugins is optional (service providers don't need to dispense plugins)
@@ -121,6 +135,13 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil // Already connected
 	}
 
+	// Discover endpoint if Discovery is configured
+	if c.cfg.Discovery != nil && c.cfg.Endpoint == "" {
+		if err := c.discoverEndpoint(ctx); err != nil {
+			return fmt.Errorf("endpoint discovery failed: %w", err)
+		}
+	}
+
 	// Create HTTP client for Connect RPCs
 	// TODO: Add TLS, timeouts, interceptors from ClientOptions
 	c.httpClient = &http.Client{}
@@ -134,6 +155,30 @@ func (c *Client) Connect(ctx context.Context) error {
 	// TODO: Start endpoint watcher if using discovery
 
 	c.connected = true
+	return nil
+}
+
+// discoverEndpoint uses the configured Discovery service to find the endpoint.
+// Caller must hold write lock.
+func (c *Client) discoverEndpoint(ctx context.Context) error {
+	serviceName := c.cfg.DiscoveryServiceName
+	if serviceName == "" {
+		serviceName = "plugin-host"
+	}
+
+	endpoints, err := c.cfg.Discovery.Discover(ctx, serviceName)
+	if err != nil {
+		return err
+	}
+
+	if len(endpoints) == 0 {
+		return fmt.Errorf("no endpoints discovered for service %q", serviceName)
+	}
+
+	// Use first endpoint (TODO: Add selection strategy)
+	c.cfg.Endpoint = endpoints[0].URL
+	c.cfg.HostURL = endpoints[0].URL
+
 	return nil
 }
 
