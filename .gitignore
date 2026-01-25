@@ -48,3 +48,4 @@ examples/*/gen/
 # Example plugin binaries (should be in dist/ only)
 examples/*-plugin/*-plugin
 examples/*-plugin/examples/
+site/
