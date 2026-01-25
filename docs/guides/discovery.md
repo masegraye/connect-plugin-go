@@ -344,4 +344,3 @@ client, err := connectplugin.NewClient(connectplugin.ClientConfig{
 
 - [Service Registry](service-registry.md) - Plugin-to-plugin service discovery
 - [Configuration Reference](../reference/configuration.md) - All config options
-- [Kubernetes Discovery](../reference/api.md#kubernetes-discovery) - Coming soon
