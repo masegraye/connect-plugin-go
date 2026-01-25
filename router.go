@@ -95,10 +95,16 @@ func (r *ServiceRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Get provider's internal endpoint
+	// First try registered endpoint (Model A via Platform.AddPlugin)
 	baseURL, ok := r.pluginEndpoints[providerID]
 	if !ok {
-		http.Error(w, fmt.Sprintf("provider endpoint not registered: %s", providerID), http.StatusNotFound)
-		return
+		// Fall back to metadata base_url (Model B self-registration)
+		if baseURLMeta, exists := provider.Metadata["base_url"]; exists {
+			baseURL = baseURLMeta
+		} else {
+			http.Error(w, fmt.Sprintf("provider endpoint not registered: %s", providerID), http.StatusNotFound)
+			return
+		}
 	}
 
 	// Log the call
@@ -124,8 +130,13 @@ func (r *ServiceRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // proxyRequest proxies an HTTP request to the target URL.
 // Returns status code and any error.
 func (r *ServiceRouter) proxyRequest(w http.ResponseWriter, req *http.Request, targetURL string) (int, error) {
-	// Create proxy request
-	proxyReq, err := http.NewRequestWithContext(req.Context(), req.Method, targetURL, req.Body)
+	// Create proxy request with query parameters from original request
+	fullURL := targetURL
+	if req.URL.RawQuery != "" {
+		fullURL = targetURL + "?" + req.URL.RawQuery
+	}
+
+	proxyReq, err := http.NewRequestWithContext(req.Context(), req.Method, fullURL, req.Body)
 	if err != nil {
 		http.Error(w, "failed to create proxy request", http.StatusInternalServerError)
 		return http.StatusInternalServerError, err

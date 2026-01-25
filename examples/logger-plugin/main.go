@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -122,11 +123,25 @@ func registerServices(ctx context.Context, client *connectplugin.Client) {
 		return
 	}
 
+	// Get my own endpoint URL for router registration
+	myPort := os.Getenv("PORT")
+	if myPort == "" {
+		myPort = "8081"
+	}
+	myHost := os.Getenv("HOSTNAME")
+	if myHost == "" {
+		myHost = "localhost"
+	}
+	myBaseURL := fmt.Sprintf("http://%s:%s", myHost, myPort)
+
 	for _, svc := range client.Config().Metadata.Provides {
 		regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 			ServiceType:  svc.Type,
 			Version:      svc.Version,
 			EndpointPath: svc.Path,
+			Metadata: map[string]string{
+				"base_url": myBaseURL,
+			},
 		})
 		regReq.Header().Set("X-Plugin-Runtime-ID", client.RuntimeID())
 		regReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
@@ -134,7 +149,7 @@ func registerServices(ctx context.Context, client *connectplugin.Client) {
 		if _, err := regClient.RegisterService(ctx, regReq); err != nil {
 			log.Fatalf("Failed to register service %s: %v", svc.Type, err)
 		}
-		log.Printf("Registered service: %s v%s", svc.Type, svc.Version)
+		log.Printf("Registered service: %s v%s at %s", svc.Type, svc.Version, myBaseURL)
 	}
 
 	// Report healthy after registration
