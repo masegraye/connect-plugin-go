@@ -279,12 +279,34 @@ server := connectplugin.Serve(&connectplugin.ServeConfig{
 
 The repository includes comprehensive examples in `examples/`:
 
+### Docker Compose URL Shortener (Recommended)
+
+Complete containerized example demonstrating Model B deployment:
+
+```bash
+cd examples/docker-compose
+./setup.sh    # Build all images
+./run.sh      # Start services
+./test.sh     # Run end-to-end tests
+./cleanup.sh  # Stop and clean up
+```
+
+**Demonstrates:**
+- Plugin-to-plugin communication (API→Storage→Logger)
+- Service discovery across containers
+- Health-based readiness
+- Production-like deployment
+
+See [Docker Compose Guide](../guides/docker-compose.md).
+
+### Local Development Examples
+
 - `examples/kv/` - Complete KV plugin implementation
 - `examples/logger-plugin/` - Simple logger service provider
 - `examples/cache-plugin/` - Cache with logger dependency
 - `examples/app-plugin/` - Application with cache dependency
 
-Run examples:
+Run KV example:
 
 ```bash
 # Terminal 1: Start plugin server

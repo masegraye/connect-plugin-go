@@ -53,6 +53,7 @@ nav:
     - Deployment Models: getting-started/deployment-models.md
   - Guides:
     - KV Example Walkthrough: guides/kv-example.md
+    - Docker Compose Deployment: guides/docker-compose.md
     - Phase 2 Service Registry: guides/service-registry.md
     - Interceptors: guides/interceptors.md
     - Discovery: guides/discovery.md

@@ -102,11 +102,45 @@ value, _ := kvStore.Get(context.Background(), "mykey")
 - **Plugin marketplaces**: Third-party plugins communicate via HTTP
 - **Cloud-native deployments**: Kubernetes-based plugin orchestration
 
+## Examples
+
+### Docker Compose URL Shortener
+
+Complete containerized example demonstrating **Model B (self-registering)** deployment:
+
+```bash
+cd examples/docker-compose
+./setup.sh   # Build images
+./run.sh     # Start services
+./test.sh    # Validate end-to-end
+./cleanup.sh # Stop and clean up
+```
+
+**Demonstrates:**
+- 4 containerized services (host, logger, storage, api)
+- Plugin-to-plugin communication (API→Storage→Logger)
+- Service discovery across containers
+- Health-based readiness
+- Dependency graph managed by host
+
+See [Docker Compose Guide](guides/docker-compose.md) for details.
+
+### KV Plugin Example
+
+Simple key-value plugin for local development:
+
+```bash
+task example:server  # Terminal 1
+task example:client  # Terminal 2
+```
+
+See [KV Example Walkthrough](guides/kv-example.md).
+
 ## Next Steps
 
 - [Quick Start Guide](getting-started/quickstart.md)
 - [Deployment Models](getting-started/deployment-models.md)
-- [KV Example Walkthrough](guides/kv-example.md)
+- [Docker Compose Guide](guides/docker-compose.md)
 - [Phase 2 Service Registry](guides/service-registry.md)
 
 ## License

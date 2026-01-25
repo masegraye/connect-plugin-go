@@ -256,38 +256,54 @@ func main() {
 }
 ```
 
-### Kubernetes Deployment
+### Docker Compose Deployment
 
-**docker-compose.yml:**
+**Complete working example in `examples/docker-compose/`:**
+
+```bash
+cd examples/docker-compose
+./setup.sh && ./run.sh && ./test.sh
+```
+
+**docker-compose.yml structure:**
 
 ```yaml
-version: '3.8'
-
 services:
   host:
-    image: myapp/plugin-host
-    ports:
-      - "8080:8080"
-    environment:
-      - PORT=8080
+    build: ./Dockerfile.host
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/health"]
 
   logger:
-    image: myapp/logger-plugin
+    build: ./Dockerfile.logger
     environment:
-      - HOST_URL=http://host:8080
-      - PORT=8081
+      HOST_URL: http://host:8080
     depends_on:
-      - host
+      host:
+        condition: service_healthy
+    # NOT depends_on: []  - logger has no plugin dependencies
 
-  cache:
-    image: myapp/cache-plugin
+  storage:
+    build: ./Dockerfile.storage
     environment:
-      - HOST_URL=http://host:8080
-      - PORT=8082
+      HOST_URL: http://host:8080
     depends_on:
-      - host
-      - logger
+      host:
+        condition: service_healthy
+    # NOT depends_on: [logger]  - Compose ignorant of this!
+
+  api:
+    build: ./Dockerfile.api
+    environment:
+      HOST_URL: http://host:8080
+    depends_on:
+      host:
+        condition: service_healthy
+    # NOT depends_on: [storage]  - Compose ignorant of this!
 ```
+
+**See [Docker Compose Guide](../guides/docker-compose.md) for complete details.**
 
 **Kubernetes:**
 

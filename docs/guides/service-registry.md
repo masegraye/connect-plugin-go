@@ -2,6 +2,23 @@
 
 The Service Registry enables plugins to provide and consume services from each other, creating a coordinated multi-plugin platform.
 
+## Live Example
+
+See Phase 2 in action with the **Docker Compose URL Shortener** example:
+
+```bash
+cd examples/docker-compose
+./setup.sh && ./run.sh && ./test.sh
+```
+
+This demonstrates:
+- Plugin-to-plugin communication (API→Storage→Logger)
+- Service discovery and registration
+- Health-based readiness
+- Host-mediated routing
+
+See [Docker Compose Guide](docker-compose.md) for details.
+
 ## Overview
 
 Phase 2 adds plugin-to-plugin communication:
