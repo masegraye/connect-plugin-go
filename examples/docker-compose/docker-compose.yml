@@ -1,0 +1,79 @@
+services:
+  host:
+    build:
+      context: ../..
+      dockerfile: examples/docker-compose/Dockerfile.host
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+    networks:
+      - plugin-network
+
+  logger:
+    build:
+      context: ../..
+      dockerfile: examples/docker-compose/Dockerfile.logger
+    hostname: logger
+    environment:
+      - HOST_URL=http://host:8080
+      - PORT=8081
+    depends_on:
+      host:
+        condition: service_healthy
+    networks:
+      - plugin-network
+
+  storage:
+    build:
+      context: ../..
+      dockerfile: examples/docker-compose/Dockerfile.storage
+    hostname: storage
+    environment:
+      - HOST_URL=http://host:8080
+      - PORT=8082
+    depends_on:
+      host:
+        condition: service_healthy
+    networks:
+      - plugin-network
+
+  api:
+    build:
+      context: ../..
+      dockerfile: examples/docker-compose/Dockerfile.api
+    hostname: api
+    ports:
+      - "8083:8083"
+    environment:
+      - HOST_URL=http://host:8080
+      - PORT=8083
+    depends_on:
+      host:
+        condition: service_healthy
+    networks:
+      - plugin-network
+
+  # Client - CLI tool for testing (not a plugin)
+  client:
+    build:
+      context: ../..
+      dockerfile: examples/docker-compose/Dockerfile.client
+    environment:
+      - API_URL=http://api:8083
+    depends_on:
+      - api
+    networks:
+      - plugin-network
+    profiles:
+      - tools
+
+networks:
+  plugin-network:
+    driver: bridge

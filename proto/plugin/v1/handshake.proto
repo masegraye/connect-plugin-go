@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package connectplugin.v1;
+
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+
+// HandshakeService handles protocol negotiation between client and server.
+service HandshakeService {
+  // Handshake performs version negotiation and plugin discovery.
+  // This is idempotent - calling multiple times returns the same result.
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+}
+
+message HandshakeRequest {
+  // Core protocol version the client supports.
+  // Currently must be 1.
+  int32 core_protocol_version = 1;
+
+  // App protocol version the client supports.
+  // v1 uses simple exact match - no negotiation of multiple versions.
+  int32 app_protocol_version = 2;
+
+  // Magic cookie for basic validation (not security).
+  // Must match server's expected value.
+  string magic_cookie_key = 3;
+  string magic_cookie_value = 4;
+
+  // Plugins the client wants to use.
+  // Server validates these are available.
+  repeated string requested_plugins = 5;
+
+  // Client metadata (for debugging/logging).
+  map<string, string> client_metadata = 6;
+
+  // NEW Phase 2: Plugin's self-declared identity.
+  // This is the plugin's notion of its own name (e.g., "cache-plugin").
+  string self_id = 10;
+
+  // NEW Phase 2: Plugin's self-declared version.
+  string self_version = 11;
+}
+
+message HandshakeResponse {
+  // Negotiated core protocol version (always 1 for v1).
+  int32 core_protocol_version = 1;
+
+  // Negotiated app protocol version (must match request for v1).
+  int32 app_protocol_version = 2;
+
+  // Available plugins on this server.
+  repeated PluginInfo plugins = 3;
+
+  // Server metadata (version, etc).
+  map<string, string> server_metadata = 4;
+
+  // Host capabilities available to plugins.
+  repeated Capability host_capabilities = 5;
+
+  // NEW Phase 2: Host-assigned runtime identity.
+  // This is globally unique and opaque to the plugin.
+  string runtime_id = 10;
+
+  // NEW Phase 2: Token for authenticating calls to host.
+  // Plugin includes this in Authorization header for all host API calls.
+  string runtime_token = 11;
+}
+
+message PluginInfo {
+  // Plugin name (e.g., "kv", "auth").
+  string name = 1;
+
+  // Plugin version (semantic version string).
+  string version = 2;
+
+  // Service path this plugin is served at.
+  string service_path = 3;
+
+  // NEW Phase 2: Services this plugin provides.
+  repeated ServiceDeclaration provides = 10;
+
+  // NEW Phase 2: Services this plugin requires.
+  repeated ServiceDependency requires = 11;
+}
+
+message Capability {
+  // Capability type (e.g., "logger", "metrics", "secrets").
+  string type = 1;
+
+  // Capability version (semver).
+  string version = 2;
+
+  // Endpoint URL for requesting this capability.
+  string endpoint = 3;
+}
+
+// NEW Phase 2: Service declaration (what a plugin provides).
+message ServiceDeclaration {
+  // Service type (e.g., "logger", "cache", "metrics").
+  string type = 1;
+
+  // Service version (semver).
+  string version = 2;
+
+  // Service endpoint path (relative to plugin base URL).
+  // e.g., "/logger.v1.Logger/"
+  string path = 3;
+}
+
+// NEW Phase 2: Service dependency (what a plugin requires).
+message ServiceDependency {
+  // Service type required (e.g., "logger", "cache").
+  string type = 1;
+
+  // Minimum version required (semver).
+  string min_version = 2;
+
+  // Block startup if this service is unavailable?
+  bool required_for_startup = 3;
+
+  // Should host send WatchService events for this dependency?
+  bool watch_for_changes = 4;
+}

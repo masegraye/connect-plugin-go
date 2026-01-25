@@ -8,6 +8,13 @@
 *.so
 *.dylib
 
+# Built binaries
+dist/
+server
+kv-server
+kv-host
+integ-test
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -30,3 +37,15 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# FP local tracking
+.fp/
+
+# Generated proto code
+gen/
+examples/*/gen/
+
+# Example plugin binaries (should be in dist/ only)
+examples/*-plugin/*-plugin
+examples/*-plugin/examples/
+site/

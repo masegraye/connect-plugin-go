@@ -1,0 +1,28 @@
+# Build artifacts
+dist/
+*.test
+*.out
+
+# Documentation build
+site/
+docs/site/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Agent workspace
+agent-workspace/
+
+# Test data
+coverage.out
+coverage.html
+
+# OS
+.DS_Store

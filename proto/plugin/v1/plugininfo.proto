@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package connectplugin.v1;
+
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+
+import "plugin/v1/handshake.proto";
+
+// PluginIdentity is implemented by PLUGINS (for Model A platform-managed deployment).
+// The host calls these methods to discover plugin capabilities and assign identity.
+//
+// Model A Sequence:
+// 1. Host starts plugin process
+// 2. Host calls GetPluginInfo() to discover metadata
+// 3. Host generates runtime_id and token
+// 4. Host calls SetRuntimeIdentity() to assign identity
+// 5. Plugin uses runtime_id for all subsequent host API calls
+service PluginIdentity {
+  // GetPluginInfo returns the plugin's self-declared identity and service declarations.
+  // Host calls this to discover what the plugin provides/requires before assigning identity.
+  rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
+
+  // SetRuntimeIdentity tells the plugin its host-assigned runtime identity.
+  // Plugin must use this runtime_id and token for all subsequent host API calls.
+  rpc SetRuntimeIdentity(SetRuntimeIdentityRequest) returns (SetRuntimeIdentityResponse);
+}
+
+message GetPluginInfoRequest {}
+
+message GetPluginInfoResponse {
+  // Plugin's self-declared identity (e.g., "cache-plugin").
+  string self_id = 1;
+
+  // Plugin's self-declared version.
+  string self_version = 2;
+
+  // Services this plugin provides.
+  repeated ServiceDeclaration provides = 3;
+
+  // Services this plugin requires.
+  repeated ServiceDependency requires = 4;
+
+  // Plugin metadata.
+  map<string, string> metadata = 5;
+}
+
+message SetRuntimeIdentityRequest {
+  // Host-assigned runtime ID (globally unique, opaque).
+  string runtime_id = 1;
+
+  // Token for authenticating calls to host APIs.
+  string runtime_token = 2;
+
+  // Host URL for plugin to call (e.g., "http://localhost:8080").
+  string host_url = 3;
+}
+
+message SetRuntimeIdentityResponse {
+  // True if identity accepted.
+  bool acknowledged = 1;
+}

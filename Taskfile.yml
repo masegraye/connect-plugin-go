@@ -1,0 +1,192 @@
+version: '3'
+
+vars:
+  MODULE: github.com/masegraye/connect-plugin-go
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  install-deps:
+    desc: Install required build dependencies
+    cmds:
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+      - go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+      - go install ./cmd/protoc-gen-connect-plugin
+    status:
+      - which protoc-gen-go
+      - which protoc-gen-connect-go
+      - which protoc-gen-connect-plugin
+
+  proto:
+    desc: Generate protobuf code for core and examples
+    deps: [install-deps]
+    cmds:
+      - mkdir -p gen/connectplugin/v1
+      - mkdir -p examples/kv/gen/kv/v1
+      - protoc --proto_path=proto
+          --go_out=gen
+          --go_opt=paths=source_relative
+          --connect-go_out=gen
+          --connect-go_opt=paths=source_relative
+          proto/plugin/v1/handshake.proto
+          proto/plugin/v1/health.proto
+          proto/plugin/v1/broker.proto
+          proto/plugin/v1/registry.proto
+          proto/plugin/v1/lifecycle.proto
+          proto/plugin/v1/plugininfo.proto
+          proto/capability/logger/v1/logger.proto
+      - protoc --proto_path=examples/kv/proto
+          --go_out=examples/kv/gen
+          --go_opt=paths=source_relative
+          --connect-go_out=examples/kv/gen
+          --connect-go_opt=paths=source_relative
+          --connect-plugin_out=examples/kv/gen
+          --connect-plugin_opt=paths=source_relative
+          examples/kv/proto/kv.proto
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Build the library
+    deps: [proto]
+    cmds:
+      - go build ./...
+      - go mod tidy
+
+  test:
+    desc: Run unit tests (excludes integration tests)
+    deps: [proto]
+    cmds:
+      - go test -v -short ./...
+
+  test:integration:
+    desc: Run Phase 2 integration tests with real plugin processes
+    deps: [build-examples]
+    cmds:
+      - go test -v -run TestIntegration_ -timeout 60s
+
+  test:all:
+    desc: Run all tests (unit + integration)
+    deps: [build-examples]
+    cmds:
+      - go test -v -timeout 60s ./...
+
+  test:coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  lint:
+    desc: Run linters
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - gofmt -s -w .
+      - goimports -w .
+
+  check:
+    desc: Run all checks (fmt, lint, test)
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -f coverage.out coverage.html
+      - rm -rf gen
+      - rm -rf examples/kv/gen
+      - rm -rf dist
+      - rm -f examples/logger-plugin/logger-plugin
+      - rm -f examples/cache-plugin/cache-plugin
+      - rm -f examples/app-plugin/app-plugin
+      - go clean ./...
+
+  build-examples:
+    desc: Build example binaries to dist/
+    deps: [proto]
+    cmds:
+      - mkdir -p dist
+      - go build -o dist/kv-server ./examples/kv/server
+      - go build -o dist/kv-host ./examples/kv/host
+      - go build -o dist/kv-host-watch ./examples/kv/host-watch
+      - go build -o dist/kv-integ-fx ./examples/kv/integ-fx
+      - go build -o dist/integ-test ./cmd/integ-test
+      - go build -o dist/logger-plugin ./examples/logger-plugin
+      - go build -o dist/cache-plugin ./examples/cache-plugin
+      - go build -o dist/app-plugin ./examples/app-plugin
+
+  # Manual example runners (for development)
+  example:server:
+    desc: Run KV plugin server manually
+    deps: [build-examples]
+    cmds:
+      - ./dist/kv-server
+
+  example:client:
+    desc: Run KV client manually (requires server)
+    deps: [build-examples]
+    cmds:
+      - ./dist/kv-host
+
+  example:watch:
+    desc: Run KV Watch client manually (requires server)
+    deps: [build-examples]
+    cmds:
+      - ./dist/kv-host-watch
+
+  # Integration tests (automated with integ-test CLI)
+  integ:kv:test:
+    desc: Integration test - basic CRUD
+    deps: [build-examples]
+    cmds:
+      - ./dist/integ-test kv
+
+  integ:kv-watch:test:
+    desc: Integration test - Watch streaming
+    deps: [build-examples]
+    cmds:
+      - ./dist/integ-test kv-watch
+
+  integ:all:
+    desc: Run all integration tests
+    cmds:
+      - task: integ:kv:test
+      - task: integ:kv-watch:test
+
+  # Documentation tasks
+  docs:serve:
+    desc: Serve documentation locally with MkDocs
+    deps: [docs:install]
+    cmds:
+      - python3 -m mkdocs serve
+
+  docs:build:
+    desc: Build documentation static site
+    deps: [docs:install]
+    cmds:
+      - python3 -m mkdocs build
+
+  docs:deploy:
+    desc: Deploy documentation to GitHub Pages
+    deps: [docs:install]
+    cmds:
+      - python3 -m mkdocs gh-deploy
+
+  docs:install:
+    desc: Install MkDocs and dependencies
+    cmds:
+      - python3 -m pip install -r requirements.txt
+    status:
+      - python3 -c "import mkdocs" 2>/dev/null

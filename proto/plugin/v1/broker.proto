@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package connectplugin.v1;
+
+option go_package = "github.com/masegraye/connect-plugin-go/gen/plugin/v1;connectpluginv1";
+
+// CapabilityBroker manages host capabilities that plugins can request.
+// Phase 1: Host capabilities only (no plugin-to-plugin service registry).
+service CapabilityBroker {
+  // RequestCapability requests access to a host capability.
+  // Returns a capability grant with bearer token.
+  rpc RequestCapability(RequestCapabilityRequest) returns (RequestCapabilityResponse);
+}
+
+message RequestCapabilityRequest {
+  // Capability type to request (e.g., "logger", "secrets").
+  string capability_type = 1;
+
+  // Minimum version required (semver).
+  string min_version = 2;
+
+  // Reason for requesting (for auditing).
+  string reason = 3;
+}
+
+message RequestCapabilityResponse {
+  // Capability grant with access token.
+  CapabilityGrant grant = 1;
+}
+
+message CapabilityGrant {
+  // Unique ID for this grant.
+  string grant_id = 1;
+
+  // Capability endpoint URL.
+  // Plugins call this URL with the bearer token.
+  string endpoint_url = 2;
+
+  // Bearer token for authentication.
+  // Include in Authorization header: "Bearer <token>"
+  string bearer_token = 3;
+
+  // Capability type granted.
+  string capability_type = 4;
+
+  // Version of the capability.
+  string version = 5;
+}
+
+// Note: Capability message is defined in handshake.proto (same package).
+// It's used in HandshakeResponse to advertise host capabilities.

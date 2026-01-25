@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package capability.logger.v1;
+
+option go_package = "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1;loggerv1";
+
+// Logger is a host capability for structured logging.
+service Logger {
+  // Log writes a log entry.
+  rpc Log(LogRequest) returns (LogResponse);
+}
+
+message LogRequest {
+  // Log level (debug, info, warn, error).
+  string level = 1;
+
+  // Log message.
+  string message = 2;
+
+  // Structured fields.
+  map<string, string> fields = 3;
+}
+
+message LogResponse {}
