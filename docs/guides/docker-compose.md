@@ -32,44 +32,20 @@ cd examples/docker-compose
 
 ## Architecture
 
-```
-┌──────────────┐
-│    Client    │ (CLI tool)
-│  (container) │
-└──────┬───────┘
-       │ HTTP :8083
-       ↓
-┌──────────────────────────────────────────────┐
-│           API Plugin (:8083)                 │
-│  Provides: api service                       │
-│  Requires: storage service                   │
-└──────┬───────────────────────────────────────┘
-       │ Discovers storage from host registry
-       │ Calls via: /services/storage/{id}/Store
-       ↓
-┌──────────────────────────────────────────────┐
-│         Storage Plugin (:8082)               │
-│  Provides: storage service                   │
-│  Requires: logger service                    │
-└──────┬───────────────────────────────────────┘
-       │ Discovers logger from host registry
-       │ Calls via: /services/logger/{id}/Log
-       ↓
-┌──────────────────────────────────────────────┐
-│         Logger Plugin (:8081)                │
-│  Provides: logger service                    │
-│  Requires: nothing                           │
-└──────────────────────────────────────────────┘
-       │
-       │ All discovery and routing through:
-       ↓
-┌──────────────────────────────────────────────┐
-│         Host Platform (:8080)                │
-│  - HandshakeService (assigns runtime_id)     │
-│  - ServiceRegistry (discovery/registration)  │
-│  - PluginLifecycle (health tracking)         │
-│  - ServiceRouter (/services/...)             │
-└──────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Client["Client (CLI tool)<br/>container"]
+    API["API Plugin :8083<br/>Provides: api service<br/>Requires: storage service"]
+    Storage["Storage Plugin :8082<br/>Provides: storage service<br/>Requires: logger service"]
+    Logger["Logger Plugin :8081<br/>Provides: logger service<br/>Requires: nothing"]
+    Host["Host Platform :8080<br/>- HandshakeService<br/>- ServiceRegistry<br/>- PluginLifecycle<br/>- ServiceRouter"]
+
+    Client -->|HTTP :8083| API
+    API -->|Discovers storage<br/>/services/storage/{id}/Store| Storage
+    Storage -->|Discovers logger<br/>/services/logger/{id}/Log| Logger
+    Logger -->|All discovery and<br/>routing through| Host
+    API -.->|via| Host
+    Storage -.->|via| Host
 ```
 
 ## docker-compose.yml Structure

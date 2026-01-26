@@ -6,27 +6,24 @@ connect-plugin-go is a remote-first plugin system for Go applications. It enable
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         Host Process                         │
-│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-│  │   Client   │  │   Platform   │  │   ServiceRegistry    │ │
-│  │            │  │              │  │                      │ │
-│  │  Dispense  │  │  Lifecycle   │  │  Discovery/Watch     │ │
-│  │  Plugins   │  │  Management  │  │  Multi-provider      │ │
-│  └────────────┘  └──────────────┘  └──────────────────────┘ │
-└────────────┬─────────────────────────────────┬───────────────┘
-             │                                 │
-        HTTP/2 (Connect RPC)            HTTP/2 (Connect RPC)
-             │                                 │
-┌────────────┴──────────┐         ┌───────────┴──────────────┐
-│   Plugin Process A    │         │   Plugin Process B        │
-│  ┌─────────────────┐  │         │  ┌────────────────────┐  │
-│  │  KV Plugin      │  │         │  │  Cache Plugin      │  │
-│  │  implements     │  │         │  │  depends on        │  │
-│  │  KVService      │  │         │  │  Logger service    │  │
-│  └─────────────────┘  │         │  └────────────────────┘  │
-└───────────────────────┘         └──────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Host["Host Process"]
+        Client["Client<br/>Dispense Plugins"]
+        Platform["Platform<br/>Lifecycle Management"]
+        Registry["ServiceRegistry<br/>Discovery/Watch<br/>Multi-provider"]
+    end
+
+    subgraph PluginA["Plugin Process A"]
+        KV["KV Plugin<br/>implements KVService"]
+    end
+
+    subgraph PluginB["Plugin Process B"]
+        Cache["Cache Plugin<br/>depends on Logger service"]
+    end
+
+    Host -->|HTTP/2<br/>Connect RPC| PluginA
+    Host -->|HTTP/2<br/>Connect RPC| PluginB
 ```
 
 ## Core Concepts

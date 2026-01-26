@@ -127,17 +127,13 @@ Fail fast when a service is consistently failing.
 
 ### State Machine
 
-```
-          failures >= threshold
-Closed ──────────────────────────> Open
-  ↑                                  │
-  │                                  │ timeout elapsed
-  │                                  ↓
-  │                              HalfOpen
-  │  successes >= threshold         │
-  └─────────────────────────────────┘
-                                     │ any failure
-                                     └──> Open
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Open: failures >= threshold
+    Open --> HalfOpen: timeout elapsed
+    HalfOpen --> Closed: successes >= threshold
+    HalfOpen --> Open: any failure
 ```
 
 **States:**

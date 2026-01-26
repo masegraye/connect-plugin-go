@@ -20,33 +20,19 @@ connect-plugin-go supports two distinct deployment models for plugins. Understan
 
 The host platform orchestrates the complete plugin lifecycle.
 
-```
-┌──────────────┐                    ┌──────────────┐
-│     Host     │                    │    Plugin    │
-│   Platform   │                    │   Process    │
-└──────┬───────┘                    └──────┬───────┘
-       │                                   │
-       │  1. Start plugin process          │
-       ├──────────────────────────────────>│
-       │                                   │
-       │  2. GetPluginInfo()               │
-       ├──────────────────────────────────>│
-       │  ← {self_id, provides, requires}  │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  3. Generate runtime_id, token    │
-       │                                   │
-       │  4. SetRuntimeIdentity()          │
-       ├──────────────────────────────────>│
-       │  ← acknowledged                   │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  5. RegisterService()             │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  6. ReportHealth()                │
-       │<──────────────────────────────────┤
-       │                                   │
+```mermaid
+sequenceDiagram
+    participant Host as Host Platform
+    participant Plugin as Plugin Process
+
+    Host->>Plugin: 1. Start plugin process
+    Host->>Plugin: 2. GetPluginInfo()
+    Plugin-->>Host: {self_id, provides, requires}
+    Note over Host: 3. Generate runtime_id, token
+    Host->>Plugin: 4. SetRuntimeIdentity()
+    Plugin-->>Host: acknowledged
+    Plugin->>Host: 5. RegisterService()
+    Plugin->>Host: 6. ReportHealth()
 ```
 
 ### Host Implementation
@@ -157,32 +143,17 @@ if hostURL == "" {
 
 Plugins connect to the host independently, like microservices.
 
-```
-┌──────────────┐                    ┌──────────────┐
-│   External   │                    │    Plugin    │
-│ Orchestrator │                    │   Process    │
-│  (k8s, etc)  │                    │              │
-└──────┬───────┘                    └──────┬───────┘
-       │                                   │
-       │  1. Start plugin process          │
-       ├──────────────────────────────────>│
-       │                                   │
-                                           │
-                            ┌──────────────┴───────────┐
-                            │         Host Platform    │
-                            └──────────────┬───────────┘
-                                           │
-       │  2. Handshake(self_id)            │
-       │<──────────────────────────────────┤
-       │  → {runtime_id, token}            │
-       ├──────────────────────────────────>│
-       │                                   │
-       │  3. RegisterService()             │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  4. ReportHealth()                │
-       │<──────────────────────────────────┤
-       │                                   │
+```mermaid
+sequenceDiagram
+    participant Orch as External Orchestrator<br/>(k8s, docker-compose)
+    participant Plugin as Plugin Process
+    participant Host as Host Platform
+
+    Orch->>Plugin: 1. Start plugin process
+    Plugin->>Host: 2. Handshake(self_id)
+    Host-->>Plugin: {runtime_id, token}
+    Plugin->>Host: 3. RegisterService()
+    Plugin->>Host: 4. ReportHealth()
 ```
 
 ### Host Implementation

@@ -23,25 +23,24 @@ See [Docker Compose Guide](docker-compose.md) for details.
 
 The Service Registry adds plugin-to-plugin communication:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Host Platform                           │
-│  ┌──────────────────┐  ┌───────────────┐  ┌──────────────┐ │
-│  │ ServiceRegistry  │  │ ServiceRouter │  │  DepGraph    │ │
-│  │                  │  │               │  │              │ │
-│  │ • Multi-provider │  │ • Mediated    │  │ • Topo sort  │ │
-│  │ • Discovery      │  │   routing     │  │ • Impact     │ │
-│  │ • Watch events   │  │ • Auth/health │  │   analysis   │ │
-│  └──────────────────┘  └───────────────┘  └──────────────┘ │
-└────────┬──────────────────────┬──────────────────┬──────────┘
-         │                      │                  │
-    ┌────┴────┐           ┌─────┴─────┐      ┌────┴────┐
-    │ Logger  │           │   Cache   │      │   App   │
-    │ Plugin  │           │  Plugin   │      │ Plugin  │
-    │         │           │ requires  │      │requires │
-    │provides │           │  logger   │      │  cache  │
-    │ logger  │           │           │      │         │
-    └─────────┘           └───────────┘      └─────────┘
+```mermaid
+flowchart TB
+    subgraph Host["Host Platform"]
+        Registry["ServiceRegistry<br/>• Multi-provider<br/>• Discovery<br/>• Watch events"]
+        Router["ServiceRouter<br/>• Mediated routing<br/>• Auth/health"]
+        DepGraph["DepGraph<br/>• Topo sort<br/>• Impact analysis"]
+    end
+
+    Logger["Logger Plugin<br/>provides: logger"]
+    Cache["Cache Plugin<br/>provides: cache<br/>requires: logger"]
+    App["App Plugin<br/>provides: app<br/>requires: cache"]
+
+    Host --- Logger
+    Host --- Cache
+    Host --- App
+
+    Cache -.requires.-> Logger
+    App -.requires.-> Cache
 ```
 
 ## Service Declarations
