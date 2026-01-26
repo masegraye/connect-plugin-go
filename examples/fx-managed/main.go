@@ -1,6 +1,7 @@
 // Package main demonstrates fx integration with PluginLauncher.
 // Shows unmanaged deployment where fx is the orchestrator.
 // Demonstrates MIXING strategies: in-memory logger + process-based KV.
+// Uses generated delegate interfaces for clean, local-feeling API.
 package main
 
 import (
@@ -9,13 +10,11 @@ import (
 	"net/http"
 	"time"
 
-	"connectrpc.com/connect"
 	connectplugin "github.com/masegraye/connect-plugin-go"
 	loggercap "github.com/masegraye/connect-plugin-go/examples/capabilities/logger"
-	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
-	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
-	loggerv1 "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1"
+	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1delegate"
 	"github.com/masegraye/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
+	"github.com/masegraye/connect-plugin-go/gen/loggerv1delegate"
 	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 	"go.uber.org/fx"
 )
@@ -46,7 +45,7 @@ func main() {
 			server := &http.Server{Addr: ":9080", Handler: mux}
 			go server.ListenAndServe()
 			time.Sleep(200 * time.Millisecond)
-			log.Println("✓ Host platform started on :9080")
+			log.Println("Host platform started on :9080")
 
 			lc.Append(fx.Hook{
 				OnStop: func(ctx context.Context) error {
@@ -68,7 +67,7 @@ func main() {
 				"logger-inmemory": {
 					Name:        "logger-inmemory",
 					Provides:    []string{"logger"},
-					Strategy:    "in-memory",  // ← In-memory
+					Strategy:    "in-memory",
 					Plugin:      &LoggerPlugin{},
 					ImplFactory: func() any { return loggercap.NewLoggerCapability() },
 					HostURL:     "http://localhost:9080",
@@ -78,7 +77,7 @@ func main() {
 				"kv-server": {
 					Name:       "kv-server",
 					Provides:   []string{"kv"},
-					Strategy:   "process",  // ← Process
+					Strategy:   "process",
 					BinaryPath: "./dist/kv-server",
 					HostURL:    "http://localhost:9080",
 					Port:       9082,
@@ -96,106 +95,81 @@ func main() {
 			return launcher
 		}),
 
-		// === Provide Typed Clients ===
+		// === Provide Typed Delegates ===
+		// These provide clean, domain-focused interfaces that hide the RPC details.
 
-		fx.Provide(fx.Annotate(
-			func(launcher *connectplugin.PluginLauncher) (string, error) {
-				log.Println("fx providing Logger (in-memory)...")
-				endpoint, err := launcher.GetService("logger-inmemory", "logger")
-				if err != nil {
-					return "", err
-				}
-				log.Printf("✓ Logger: %s (goroutine)", endpoint)
-				return endpoint, nil
-			},
-			fx.ResultTags(`name:"loggerEndpoint"`),
-		)),
+		fx.Provide(func(launcher *connectplugin.PluginLauncher) (loggerv1delegate.Logger, error) {
+			log.Println("fx providing Logger delegate (in-memory)...")
+			endpoint, err := launcher.GetService("logger-inmemory", "logger")
+			if err != nil {
+				return nil, err
+			}
+			log.Printf("Logger endpoint: %s (goroutine)", endpoint)
 
-		fx.Provide(fx.Annotate(
-			func(endpoint string) loggerv1connect.LoggerClient {
-				return loggerv1connect.NewLoggerClient(&http.Client{}, endpoint)
-			},
-			fx.ParamTags(`name:"loggerEndpoint"`),
-		)),
+			// Create typed delegate - application code uses this clean interface
+			client := loggerv1connect.NewLoggerClient(http.DefaultClient, endpoint)
+			return loggerv1delegate.New(client), nil
+		}),
 
-		fx.Provide(fx.Annotate(
-			func(launcher *connectplugin.PluginLauncher) (string, error) {
-				log.Println("fx providing KV (process)...")
-				endpoint, err := launcher.GetService("kv-server", "kv")
-				if err != nil {
-					return "", err
-				}
-				log.Printf("✓ KV: %s (child process)", endpoint)
-				return endpoint, nil
-			},
-			fx.ResultTags(`name:"kvEndpoint"`),
-		)),
+		fx.Provide(func(launcher *connectplugin.PluginLauncher) (kvv1delegate.KV, error) {
+			log.Println("fx providing KV delegate (process)...")
+			endpoint, err := launcher.GetService("kv-server", "kv")
+			if err != nil {
+				return nil, err
+			}
+			log.Printf("KV endpoint: %s (child process)", endpoint)
 
-		fx.Provide(fx.Annotate(
-			func(endpoint string) kvv1connect.KVServiceClient {
-				return kvv1connect.NewKVServiceClient(&http.Client{}, endpoint)
-			},
-			fx.ParamTags(`name:"kvEndpoint"`),
-		)),
+			// Create typed delegate - application code uses this clean interface
+			return kvv1delegate.NewFromURL(endpoint), nil
+		}),
 
 		// === Application Code ===
+		// Note: Application only knows about Logger and KV interfaces.
+		// It has no idea these are remote plugins - the API feels local.
 
 		fx.Invoke(func(lc fx.Lifecycle, shutdowner fx.Shutdowner,
-			logger loggerv1connect.LoggerClient,
-			kv kvv1connect.KVServiceClient) {
+			logger loggerv1delegate.Logger,
+			kv kvv1delegate.KV) {
 
 			lc.Append(fx.Hook{
 				OnStart: func(ctx context.Context) error {
 					time.Sleep(500 * time.Millisecond)
 
 					log.Println()
-					log.Println("=== Application Using Typed Clients ===")
+					log.Println("=== Application Using Typed Delegates ===")
 					log.Println()
 
-					// Log start
-					logger.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
-						Level:   "INFO",
-						Message: "Application started",
-					}))
+					// Clean API - no connect.NewRequest, no message types!
+					logger.Log(ctx, "INFO", "Application started", nil)
 
-					// Store data
-					_, err := kv.Put(ctx, connect.NewRequest(&kvv1.PutRequest{
-						Key:   "user:123",
-						Value: []byte("Alice"),
-					}))
+					// Store data - simple method call
+					err := kv.Put(ctx, "user:123", []byte("Alice"))
 					if err != nil {
 						return err
 					}
-					log.Println("✓ kv.Put(\"user:123\", \"Alice\")")
+					log.Println("kv.Put(\"user:123\", \"Alice\")")
 
-					logger.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
-						Level: "INFO",
-						Message: "Stored user data",
-						Fields: map[string]string{"key": "user:123"},
-					}))
+					logger.Log(ctx, "INFO", "Stored user data", map[string]string{"key": "user:123"})
 
-					// Retrieve data
-					resp, err := kv.Get(ctx, connect.NewRequest(&kvv1.GetRequest{
-						Key: "user:123",
-					}))
+					// Retrieve data - clean return values
+					value, found, err := kv.Get(ctx, "user:123")
 					if err != nil {
 						return err
 					}
-					log.Printf("✓ kv.Get(\"user:123\") → %s", resp.Msg.Value)
+					if found {
+						log.Printf("kv.Get(\"user:123\") -> %s", value)
+					}
 
-					logger.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
-						Level: "INFO",
-						Message: "Retrieved user data",
-						Fields: map[string]string{"value": string(resp.Msg.Value)},
-					}))
+					logger.Log(ctx, "INFO", "Retrieved user data", map[string]string{"value": string(value)})
 
 					log.Println()
 					log.Println("=== fx-managed demonstration complete! ===")
 					log.Println("  - Logger: IN-MEMORY (goroutine)")
 					log.Println("  - KV: PROCESS (child process)")
 					log.Println("  - MIXED STRATEGIES working together!")
-					log.Println("  - Application uses generated typed clients")
-					log.Println("  - Real data flowing through system")
+					log.Println("  - Application uses GENERATED DELEGATES")
+					log.Println("  - Clean API: kv.Put(ctx, key, value)")
+					log.Println("  - No connect.NewRequest boilerplate!")
 					log.Println()
 
 					return shutdowner.Shutdown()

@@ -26,6 +26,7 @@ tasks:
     cmds:
       - mkdir -p gen/connectplugin/v1
       - mkdir -p examples/kv/gen/kv/v1
+      # Core plugin protocol (no delegate generation - internal framework)
       - protoc --proto_path=proto
           --go_out=gen
           --go_opt=paths=source_relative
@@ -37,7 +38,16 @@ tasks:
           proto/plugin/v1/registry.proto
           proto/plugin/v1/lifecycle.proto
           proto/plugin/v1/plugininfo.proto
+      # Logger capability (with delegate generation for user-facing API)
+      - protoc --proto_path=proto
+          --go_out=gen
+          --go_opt=paths=source_relative
+          --connect-go_out=gen
+          --connect-go_opt=paths=source_relative
+          --connect-plugin_out=gen
+          --connect-plugin_opt=paths=source_relative
           proto/capability/logger/v1/logger.proto
+      # KV example (with delegate generation)
       - protoc --proto_path=examples/kv/proto
           --go_out=examples/kv/gen
           --go_opt=paths=source_relative
