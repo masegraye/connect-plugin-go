@@ -1,5 +1,6 @@
 services:
   host:
+    image: masongraye827/cpg-platform:latest
     build:
       context: ../..
       dockerfile: examples/docker-compose/Dockerfile.host
@@ -17,6 +18,7 @@ services:
       - plugin-network
 
   logger:
+    image: masongraye827/cpg-logger-plugin:latest
     build:
       context: ../..
       dockerfile: examples/docker-compose/Dockerfile.logger
@@ -31,6 +33,7 @@ services:
       - plugin-network
 
   storage:
+    image: masongraye827/cpg-storage-plugin:latest
     build:
       context: ../..
       dockerfile: examples/docker-compose/Dockerfile.storage
@@ -45,6 +48,7 @@ services:
       - plugin-network
 
   api:
+    image: masongraye827/cpg-api-plugin:latest
     build:
       context: ../..
       dockerfile: examples/docker-compose/Dockerfile.api

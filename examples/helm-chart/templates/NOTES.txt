@@ -1,0 +1,66 @@
+🎉 URL Shortener deployed successfully!
+
+Your release is named {{ .Release.Name }}.
+
+To access the URL shortener API:
+
+{{- if eq .Values.service.type "ClusterIP" }}
+
+1. Port-forward to access the API:
+
+   kubectl port-forward svc/{{ include "url-shortener.fullname" . }} 8083:{{ .Values.service.port }}
+
+2. In another terminal, test the API:
+
+   # Shorten a URL
+   curl -X POST "http://localhost:8083/api.v1.API/Shorten?url=https://example.com"
+
+   # Resolve a short code (use code from above)
+   curl "http://localhost:8083/api.v1.API/Resolve?code=<SHORT_CODE>"
+
+{{- else if eq .Values.service.type "LoadBalancer" }}
+
+1. Get the LoadBalancer IP:
+
+   export SERVICE_IP=$(kubectl get svc {{ include "url-shortener.fullname" . }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+
+2. Test the API:
+
+   # Shorten a URL
+   curl -X POST "http://$SERVICE_IP:{{ .Values.service.port }}/api.v1.API/Shorten?url=https://example.com"
+
+   # Resolve a short code
+   curl "http://$SERVICE_IP:{{ .Values.service.port }}/api.v1.API/Resolve?code=<SHORT_CODE>"
+
+{{- else if eq .Values.service.type "NodePort" }}
+
+1. Get the Node IP and port:
+
+   export NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}')
+   export NODE_PORT=$(kubectl get svc {{ include "url-shortener.fullname" . }} -o jsonpath='{.spec.ports[0].nodePort}')
+
+2. Test the API:
+
+   # Shorten a URL
+   curl -X POST "http://$NODE_IP:$NODE_PORT/api.v1.API/Shorten?url=https://example.com"
+
+{{- end }}
+
+View pod logs:
+
+  # All containers
+  kubectl logs {{ include "url-shortener.fullname" . }}-<pod-id>
+
+  # Specific container
+  kubectl logs {{ include "url-shortener.fullname" . }}-<pod-id> -c host
+  kubectl logs {{ include "url-shortener.fullname" . }}-<pod-id> -c logger
+  kubectl logs {{ include "url-shortener.fullname" . }}-<pod-id> -c storage
+  kubectl logs {{ include "url-shortener.fullname" . }}-<pod-id> -c api
+
+View plugin→plugin routing:
+
+  kubectl logs {{ include "url-shortener.fullname" . }}-<pod-id> -c host | grep ROUTER
+
+Scale the deployment:
+
+  kubectl scale deployment {{ include "url-shortener.fullname" . }} --replicas=3

@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "url-shortener.fullname" . }}
+  labels:
+    {{- include "url-shortener.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "url-shortener.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "url-shortener.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      containers:
+      # Container 1: Host Platform (starts first, provides Phase 2 services)
+      - name: host
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.host }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: host-http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        {{- with .Values.probes.host.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.probes.host.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.resources.host }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+
+      # Sidecar 1: Logger Plugin (no dependencies)
+      - name: logger
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.logger }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: logger-http
+          containerPort: 8081
+          protocol: TCP
+        env:
+        - name: HOST_URL
+          value: "http://localhost:8080"
+        - name: PORT
+          value: "8081"
+        - name: HOSTNAME
+          value: "localhost"
+        {{- with .Values.resources.logger }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+
+      # Sidecar 2: Storage Plugin (requires logger)
+      - name: storage
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.storage }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: storage-http
+          containerPort: 8082
+          protocol: TCP
+        env:
+        - name: HOST_URL
+          value: "http://localhost:8080"
+        - name: PORT
+          value: "8082"
+        - name: HOSTNAME
+          value: "localhost"
+        {{- with .Values.resources.storage }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+
+      # Sidecar 3: API Plugin (requires storage)
+      - name: api
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.api }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: api-http
+          containerPort: 8083
+          protocol: TCP
+        env:
+        - name: HOST_URL
+          value: "http://localhost:8080"
+        - name: PORT
+          value: "8083"
+        - name: HOSTNAME
+          value: "localhost"
+        {{- with .Values.resources.api }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

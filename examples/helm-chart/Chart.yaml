@@ -1,0 +1,17 @@
+apiVersion: v2
+name: url-shortener
+description: URL shortener demonstrating connect-plugin-go sidecar deployment
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - plugins
+  - connect-rpc
+  - url-shortener
+  - sidecar
+home: https://github.com/masegraye/connect-plugin-go
+sources:
+  - https://github.com/masegraye/connect-plugin-go
+maintainers:
+  - name: Mason Graye
+    email: mason.graye@docker.com
