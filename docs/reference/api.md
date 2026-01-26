@@ -59,7 +59,7 @@ kv, _ := connectplugin.DispenseTyped[kvv1connect.KVServiceClient](client, "kv")
 kv := connectplugin.MustDispenseTyped[kvv1connect.KVServiceClient](client, "kv")
 ```
 
-### Phase 2 Client APIs
+### Service Registry Client APIs
 
 ```go
 func (c *Client) RuntimeID() string
@@ -117,7 +117,7 @@ func (s *Server) Wait() error
 func (s *Server) Shutdown(ctx context.Context) error
 ```
 
-## Platform APIs (Model A)
+## Platform APIs (Managed)
 
 ### Platform Creation
 
@@ -291,7 +291,7 @@ type Endpoint struct { /* ... */ }
 type AuthContext struct { /* ... */ }
 ```
 
-### Phase 2 Types
+### Service Registry Types
 
 ```go
 type Platform struct { /* ... */ }
@@ -358,4 +358,4 @@ const (
 
 - [Proto Reference](proto.md) - Protocol buffer definitions
 - [Configuration Reference](configuration.md) - Config options
-- [Service Registry Guide](../guides/service-registry.md) - Phase 2 features
+- [Service Registry Guide](../guides/service-registry.md) - Service Registry features

@@ -24,7 +24,7 @@ spec:
       {{- end }}
 
       containers:
-      # Container 1: Host Platform (starts first, provides Phase 2 services)
+      # Container 1: Host Platform (starts first, provides Service Registry services)
       - name: host
         image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.host }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}

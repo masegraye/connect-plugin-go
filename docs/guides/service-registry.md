@@ -1,10 +1,10 @@
-# Phase 2: Service Registry Guide
+# Service Registry Guide
 
 The Service Registry enables plugins to provide and consume services from each other, creating a coordinated multi-plugin platform.
 
 ## Live Example
 
-See Phase 2 in action with the **Docker Compose URL Shortener** example:
+See the Service Registry in action with the **Docker Compose URL Shortener** example:
 
 ```bash
 cd examples/docker-compose
@@ -21,27 +21,26 @@ See [Docker Compose Guide](docker-compose.md) for details.
 
 ## Overview
 
-Phase 2 adds plugin-to-plugin communication:
+The Service Registry adds plugin-to-plugin communication:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Host Platform                           │
-│  ┌──────────────────┐  ┌───────────────┐  ┌──────────────┐ │
-│  │ ServiceRegistry  │  │ ServiceRouter │  │  DepGraph    │ │
-│  │                  │  │               │  │              │ │
-│  │ • Multi-provider │  │ • Mediated    │  │ • Topo sort  │ │
-│  │ • Discovery      │  │   routing     │  │ • Impact     │ │
-│  │ • Watch events   │  │ • Auth/health │  │   analysis   │ │
-│  └──────────────────┘  └───────────────┘  └──────────────┘ │
-└────────┬──────────────────────┬──────────────────┬──────────┘
-         │                      │                  │
-    ┌────┴────┐           ┌─────┴─────┐      ┌────┴────┐
-    │ Logger  │           │   Cache   │      │   App   │
-    │ Plugin  │           │  Plugin   │      │ Plugin  │
-    │         │           │ requires  │      │requires │
-    │provides │           │  logger   │      │  cache  │
-    │ logger  │           │           │      │         │
-    └─────────┘           └───────────┘      └─────────┘
+```mermaid
+flowchart TB
+    subgraph Host["Host Platform"]
+        Registry["ServiceRegistry<br/>• Multi-provider<br/>• Discovery<br/>• Watch events"]
+        Router["ServiceRouter<br/>• Mediated routing<br/>• Auth/health"]
+        DepGraph["DepGraph<br/>• Topo sort<br/>• Impact analysis"]
+    end
+
+    Logger["Logger Plugin<br/>provides: logger"]
+    Cache["Cache Plugin<br/>provides: cache<br/>requires: logger"]
+    App["App Plugin<br/>provides: app<br/>requires: cache"]
+
+    Host --- Logger
+    Host --- Cache
+    Host --- App
+
+    Cache -.requires.-> Logger
+    App -.requires.-> Cache
 ```
 
 ## Service Declarations
@@ -316,7 +315,7 @@ err := platform.AddPlugin(ctx, connectplugin.PluginConfig{
 
 Platform orchestrates:
 1. Validate dependencies available
-2. Call GetPluginInfo() (Model A)
+2. Call GetPluginInfo() (Managed)
 3. Assign runtime_id and token
 4. Wait for service registration
 5. Wait for healthy state

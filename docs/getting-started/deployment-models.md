@@ -4,7 +4,7 @@ connect-plugin-go supports two distinct deployment models for plugins. Understan
 
 ## Overview
 
-| Aspect | Model A: Platform-Managed | Model B: Self-Registering |
+| Aspect | Managed Deployment | Unmanaged Deployment |
 |--------|---------------------------|---------------------------|
 | **Who starts plugins?** | Host platform | External orchestrator (k8s, docker-compose) |
 | **Who initiates handshake?** | Host calls plugin | Plugin calls host |
@@ -14,39 +14,25 @@ connect-plugin-go supports two distinct deployment models for plugins. Understan
 | **Plugin role** | Server (plugin exposes RPC) | Client (plugin calls host) |
 | **Host role** | Client (calls plugin RPC) | Server (host exposes RPC) |
 
-## Model A: Platform-Managed Plugins
+## Managed Deployment Plugins
 
 ### Architecture
 
 The host platform orchestrates the complete plugin lifecycle.
 
-```
-┌──────────────┐                    ┌──────────────┐
-│     Host     │                    │    Plugin    │
-│   Platform   │                    │   Process    │
-└──────┬───────┘                    └──────┬───────┘
-       │                                   │
-       │  1. Start plugin process          │
-       ├──────────────────────────────────>│
-       │                                   │
-       │  2. GetPluginInfo()               │
-       ├──────────────────────────────────>│
-       │  ← {self_id, provides, requires}  │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  3. Generate runtime_id, token    │
-       │                                   │
-       │  4. SetRuntimeIdentity()          │
-       ├──────────────────────────────────>│
-       │  ← acknowledged                   │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  5. RegisterService()             │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  6. ReportHealth()                │
-       │<──────────────────────────────────┤
-       │                                   │
+```mermaid
+sequenceDiagram
+    participant Host as Host Platform
+    participant Plugin as Plugin Process
+
+    Host->>Plugin: 1. Start plugin process
+    Host->>Plugin: 2. GetPluginInfo()
+    Plugin-->>Host: {self_id, provides, requires}
+    Note over Host: 3. Generate runtime_id, token
+    Host->>Plugin: 4. SetRuntimeIdentity()
+    Plugin-->>Host: acknowledged
+    Plugin->>Host: 5. RegisterService()
+    Plugin->>Host: 6. ReportHealth()
 ```
 
 ### Host Implementation
@@ -125,16 +111,16 @@ Plugins can support both models with environment variable detection:
 hostURL := os.Getenv("HOST_URL")
 
 if hostURL == "" {
-    // Model A: Wait for host to call SetRuntimeIdentity
-    log.Println("Running in Model A (platform-managed)")
+    // Managed: Wait for host to call SetRuntimeIdentity
+    log.Println("Running in Managed (platform-managed)")
 } else {
-    // Model B: Connect to host immediately
+    // Unmanaged: Connect to host immediately
     client.Connect(ctx)
     registerServices(client)
 }
 ```
 
-### When to Use Model A
+### When to Use Managed
 
 ✅ **Good for:**
 
@@ -151,38 +137,23 @@ if hostURL == "" {
 - Distributed deployments
 - Plugins that start independently
 
-## Model B: Self-Registering Plugins
+## Unmanaged Deployment Plugins
 
 ### Architecture
 
 Plugins connect to the host independently, like microservices.
 
-```
-┌──────────────┐                    ┌──────────────┐
-│   External   │                    │    Plugin    │
-│ Orchestrator │                    │   Process    │
-│  (k8s, etc)  │                    │              │
-└──────┬───────┘                    └──────┬───────┘
-       │                                   │
-       │  1. Start plugin process          │
-       ├──────────────────────────────────>│
-       │                                   │
-                                           │
-                            ┌──────────────┴───────────┐
-                            │         Host Platform    │
-                            └──────────────┬───────────┘
-                                           │
-       │  2. Handshake(self_id)            │
-       │<──────────────────────────────────┤
-       │  → {runtime_id, token}            │
-       ├──────────────────────────────────>│
-       │                                   │
-       │  3. RegisterService()             │
-       │<──────────────────────────────────┤
-       │                                   │
-       │  4. ReportHealth()                │
-       │<──────────────────────────────────┤
-       │                                   │
+```mermaid
+sequenceDiagram
+    participant Orch as External Orchestrator<br/>(k8s, docker-compose)
+    participant Plugin as Plugin Process
+    participant Host as Host Platform
+
+    Orch->>Plugin: 1. Start plugin process
+    Plugin->>Host: 2. Handshake(self_id)
+    Host-->>Plugin: {runtime_id, token}
+    Plugin->>Host: 3. RegisterService()
+    Plugin->>Host: 4. ReportHealth()
 ```
 
 ### Host Implementation
@@ -336,7 +307,7 @@ spec:
           value: "8082"
 ```
 
-### When to Use Model B
+### When to Use Unmanaged
 
 ✅ **Good for:**
 
@@ -355,7 +326,7 @@ spec:
 
 ## Comparison Table
 
-| Feature | Model A | Model B |
+| Feature | Managed | Unmanaged |
 |---------|---------|---------|
 | **Startup coordination** | Host controls | External orchestrator |
 | **Dependency ordering** | Platform.AddPlugin() validates | Plugins handle degradation |
@@ -371,8 +342,8 @@ spec:
 
 You can mix both models in the same deployment:
 
-- **Core plugins**: Platform-managed (Model A) for trusted, critical plugins
-- **Extension plugins**: Self-registering (Model B) for third-party or scaled plugins
+- **Core plugins**: Platform-managed (Managed) for trusted, critical plugins
+- **Extension plugins**: Self-registering (Unmanaged) for third-party or scaled plugins
 
 ```go
 // Core plugins managed by platform
@@ -384,12 +355,12 @@ platform.AddPlugin(ctx, corePluginConfig)
 
 ## Migration Path
 
-**Start with Model A** for simplicity:
+**Start with Managed** for simplicity:
 - Easier to reason about
 - Less infrastructure needed
 - Better for development
 
-**Migrate to Model B** for production:
+**Migrate to Unmanaged** for production:
 - More scalable
 - Better fault isolation
 - Kubernetes-friendly

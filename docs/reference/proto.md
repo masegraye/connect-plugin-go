@@ -23,7 +23,7 @@ message HandshakeRequest {
   repeated string requested_plugins = 5;  // Plugins to use
   map<string, string> client_metadata = 6;
 
-  // Phase 2
+  // Service Registry
   string self_id = 10;       // Plugin's self-declared ID
   string self_version = 11;  // Plugin's version
 }
@@ -35,13 +35,13 @@ message HandshakeResponse {
   map<string, string> server_metadata = 4;
   repeated Capability host_capabilities = 5;
 
-  // Phase 2
+  // Service Registry
   string runtime_id = 10;     // Host-assigned runtime ID
   string runtime_token = 11;  // Authentication token
 }
 ```
 
-### PluginIdentity (Model A)
+### PluginIdentity (Managed)
 
 Plugin-side service for platform-managed deployment.
 
@@ -68,7 +68,7 @@ message SetRuntimeIdentityRequest {
 }
 ```
 
-## Phase 2 Services
+## Service Registry Services
 
 ### ServiceRegistry
 
@@ -199,9 +199,9 @@ message Capability {
 
 ## Header Conventions
 
-### Phase 2 Headers
+### Service Registry Headers
 
-All Phase 2 plugin→host calls must include:
+All Service Registry plugin→host calls must include:
 
 ```
 X-Plugin-Runtime-ID: <runtime_id>
@@ -301,5 +301,5 @@ Value: d3e5f7a9b1c2
 ## Next Steps
 
 - [Configuration Reference](configuration.md) - All config options
-- [Service Registry Guide](../guides/service-registry.md) - Using Phase 2 features
+- [Service Registry Guide](../guides/service-registry.md) - Using Service Registry features
 - [Interceptors Guide](../guides/interceptors.md) - Retry, circuit breaker, auth

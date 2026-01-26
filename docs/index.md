@@ -13,29 +13,29 @@ connect-plugin-go enables you to build extensible Go applications with plugins t
 
 ## Key Features
 
-### Phase 1: Core Plugin System
-- ✅ Type-safe plugin interfaces with code generation
-- ✅ Network-based plugin communication (HTTP/2)
-- ✅ Handshake protocol for version negotiation
-- ✅ Health checking and monitoring
-- ✅ Host capability broker for bidirectional calls
+### Core Plugin System
+- Type-safe plugin interfaces with code generation
+- Network-based plugin communication (HTTP/2)
+- Handshake protocol for version negotiation
+- Health checking and monitoring
+- Host capability broker for bidirectional calls
 
-### Phase 2: Service Registry
-- ✅ Plugin-to-plugin service communication
-- ✅ Service discovery and registration
-- ✅ Multi-provider support with host-controlled selection
-- ✅ Three-state health model (Healthy/Degraded/Unhealthy)
-- ✅ Dependency graph and topological startup ordering
-- ✅ Dynamic lifecycle (add/remove/replace plugins at runtime)
-- ✅ Impact analysis for plugin removal
-- ✅ Two deployment models: platform-managed and self-registering
+### Service Registry
+- Plugin-to-plugin service communication
+- Service discovery and registration
+- Multi-provider support with host-controlled selection
+- Three-state health model (Healthy/Degraded/Unhealthy)
+- Dependency graph and topological startup ordering
+- Dynamic lifecycle (add/remove/replace plugins at runtime)
+- Impact analysis for plugin removal
+- Two deployment models: managed and unmanaged
 
 ### Reliability & Security
-- ✅ Retry interceptor with exponential backoff
-- ✅ Circuit breaker with state machine (Closed/Open/HalfOpen)
-- ✅ Flexible authentication (Token, API Key, mTLS)
-- ✅ Static endpoint discovery
-- ✅ Composable interceptor chains
+- Retry interceptor with exponential backoff
+- Circuit breaker with state machine (Closed/Open/HalfOpen)
+- Flexible authentication (Token, API Key, mTLS)
+- Static endpoint discovery
+- Composable interceptor chains
 
 ## Quick Example
 
@@ -104,9 +104,25 @@ value, _ := kvStore.Get(context.Background(), "mykey")
 
 ## Examples
 
+### Kubernetes Helm Chart
+
+Demonstrates **unmanaged deployment** with Kubernetes sidecar pattern (4 containers in 1 pod):
+
+```bash
+cd examples/helm-chart
+./setup.sh   # Build and push images
+./install.sh # Deploy to K8s
+./test.sh    # Validate
+./cleanup.sh # Remove
+```
+
+Shows sidecar pattern with localhost plugin communication.
+
+See [Kubernetes Guide](guides/kubernetes.md) for details.
+
 ### Docker Compose URL Shortener
 
-Complete containerized example demonstrating **Model B (self-registering)** deployment:
+Complete containerized example demonstrating **unmanaged deployment** (docker-compose orchestrates lifecycle):
 
 ```bash
 cd examples/docker-compose
@@ -116,7 +132,7 @@ cd examples/docker-compose
 ./cleanup.sh # Stop and clean up
 ```
 
-**Demonstrates:**
+Demonstrates:
 - 4 containerized services (host, logger, storage, api)
 - Plugin-to-plugin communication (API→Storage→Logger)
 - Service discovery across containers
@@ -140,8 +156,9 @@ See [KV Example Walkthrough](guides/kv-example.md).
 
 - [Quick Start Guide](getting-started/quickstart.md)
 - [Deployment Models](getting-started/deployment-models.md)
+- [Kubernetes Guide](guides/kubernetes.md)
 - [Docker Compose Guide](guides/docker-compose.md)
-- [Phase 2 Service Registry](guides/service-registry.md)
+- [Service Registry Guide](guides/service-registry.md)
 
 ## License
 

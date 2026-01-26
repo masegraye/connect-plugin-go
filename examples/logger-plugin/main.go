@@ -25,11 +25,11 @@ func main() {
 	hostURL := os.Getenv("HOST_URL")
 
 	// Deployment model detection:
-	// - If HOST_URL is set → Model B (self-registering, plugin initiates handshake)
-	// - If HOST_URL is empty → Model A (platform-managed, wait for host to call us)
+	// - If HOST_URL is set → Unmanaged (self-registering, plugin initiates handshake)
+	// - If HOST_URL is empty → Managed (platform-managed, wait for host to call us)
 	modelB := hostURL != ""
 	if !modelB {
-		hostURL = "http://localhost:8080" // Default for when Model A calls SetRuntimeIdentity
+		hostURL = "http://localhost:8080" // Default for when Managed calls SetRuntimeIdentity
 	}
 
 	// Create plugin client
@@ -51,18 +51,18 @@ func main() {
 
 	ctx := context.Background()
 
-	// Model B: Connect to host immediately
+	// Unmanaged: Connect to host immediately
 	if modelB {
 		if err := client.Connect(ctx); err != nil {
 			log.Fatalf("Failed to connect: %v", err)
 		}
-		log.Printf("Logger plugin started (Model B) with runtime_id: %s", client.RuntimeID())
+		log.Printf("Logger plugin started (Unmanaged) with runtime_id: %s", client.RuntimeID())
 
 		// Register services immediately
 		registerServices(ctx, client)
 	} else {
-		log.Printf("Logger plugin started (Model A) - waiting for host to assign identity")
-		// Model A: Wait for host to call SetRuntimeIdentity, then register
+		log.Printf("Logger plugin started (Managed) - waiting for host to assign identity")
+		// Managed: Wait for host to call SetRuntimeIdentity, then register
 		// The identity handler will call registerServices via callback
 	}
 
@@ -74,7 +74,7 @@ func main() {
 	path, handler := connectpluginv1connect.NewPluginControlHandler(controlHandler)
 	mux.Handle(path, handler)
 
-	// Implement PluginIdentity service (for Model A)
+	// Implement PluginIdentity service (for Managed)
 	identityHandler := &pluginIdentityHandler{
 		client:   client,
 		metadata: client.Config().Metadata,
@@ -214,10 +214,10 @@ func (h *pluginIdentityHandler) SetRuntimeIdentity(
 	log.Printf("Received runtime identity: %s (token: %s...)",
 		req.Msg.RuntimeId, req.Msg.RuntimeToken[:8])
 
-	// Store the runtime identity (Model A)
+	// Store the runtime identity (Managed)
 	h.client.SetRuntimeIdentity(req.Msg.RuntimeId, req.Msg.RuntimeToken, req.Msg.HostUrl)
 
-	// Model A: Now that we have runtime identity, register services
+	// Managed: Now that we have runtime identity, register services
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		registerServices(context.Background(), h.client)

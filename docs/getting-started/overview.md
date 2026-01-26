@@ -6,27 +6,24 @@ connect-plugin-go is a remote-first plugin system for Go applications. It enable
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         Host Process                         │
-│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-│  │   Client   │  │   Platform   │  │   ServiceRegistry    │ │
-│  │            │  │              │  │                      │ │
-│  │  Dispense  │  │  Lifecycle   │  │  Discovery/Watch     │ │
-│  │  Plugins   │  │  Management  │  │  Multi-provider      │ │
-│  └────────────┘  └──────────────┘  └──────────────────────┘ │
-└────────────┬─────────────────────────────────┬───────────────┘
-             │                                 │
-        HTTP/2 (Connect RPC)            HTTP/2 (Connect RPC)
-             │                                 │
-┌────────────┴──────────┐         ┌───────────┴──────────────┐
-│   Plugin Process A    │         │   Plugin Process B        │
-│  ┌─────────────────┐  │         │  ┌────────────────────┐  │
-│  │  KV Plugin      │  │         │  │  Cache Plugin      │  │
-│  │  implements     │  │         │  │  depends on        │  │
-│  │  KVService      │  │         │  │  Logger service    │  │
-│  └─────────────────┘  │         │  └────────────────────┘  │
-└───────────────────────┘         └──────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Host["Host Process"]
+        Client["Client<br/>Dispense Plugins"]
+        Platform["Platform<br/>Lifecycle Management"]
+        Registry["ServiceRegistry<br/>Discovery/Watch<br/>Multi-provider"]
+    end
+
+    subgraph PluginA["Plugin Process A"]
+        KV["KV Plugin<br/>implements KVService"]
+    end
+
+    subgraph PluginB["Plugin Process B"]
+        Cache["Cache Plugin<br/>depends on Logger service"]
+    end
+
+    Host -->|HTTP/2<br/>Connect RPC| PluginA
+    Host -->|HTTP/2<br/>Connect RPC| PluginB
 ```
 
 ## Core Concepts
@@ -57,10 +54,10 @@ Before any plugin communication, host and plugin perform a handshake to:
 
 - Negotiate protocol versions
 - Exchange magic cookies for basic validation
-- Assign runtime identity (Phase 2)
-- Declare service capabilities (Phase 2)
+- Assign runtime identity 
+- Declare service capabilities 
 
-### Service Registry (Phase 2)
+### Service Registry 
 
 Plugins can provide and consume services from each other:
 
@@ -74,7 +71,7 @@ Plugins can provide and consume services from each other:
 
 connect-plugin-go supports two deployment models:
 
-### Model A: Platform-Managed Plugins
+### Managed: Platform-Managed Plugins
 
 The host platform orchestrates plugin lifecycle:
 
@@ -89,7 +86,7 @@ The host platform orchestrates plugin lifecycle:
 
 **Use case**: Traditional plugin architectures, local development, trusted plugins.
 
-### Model B: Self-Registering Plugins
+### Unmanaged: Self-Registering Plugins
 
 External orchestrator (Kubernetes, docker-compose) manages plugins:
 

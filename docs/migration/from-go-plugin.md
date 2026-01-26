@@ -9,7 +9,7 @@ Guide for migrating from HashiCorp's `go-plugin` to `connect-plugin-go`.
 | **Protocol** | gRPC (custom framing) | HTTP/2 (Connect RPC) |
 | **Network mode** | Optional (default local) | Always network-based |
 | **Type safety** | `interface{}` casting | Generated typed clients |
-| **Service discovery** | Not built-in | Phase 2 registry |
+| **Service discovery** | Not built-in | Service Registry |
 | **Health checking** | Basic ping | Three-state model |
 | **Dependencies** | Manual | Dependency graph |
 | **Hot reload** | Manual | Platform.ReplacePlugin() |
@@ -256,7 +256,7 @@ cap, _ := client.RequestCapability(ctx, "logger")
 loggerClient := loggerv1connect.NewLoggerClient(httpClient, cap.Endpoint)
 ```
 
-Or use Phase 2 service registry:
+Or use Service Registry registry:
 
 ```go
 // Plugin discovers service from registry
@@ -365,7 +365,7 @@ Plugins: map[string]plugin.Plugin{
 **connect-plugin-go:** Dynamic service discovery
 
 ```go
-// Phase 2: Discover available services at runtime
+// Service Registry: Discover available services at runtime
 services, _ := regClient.ListServices(ctx)
 
 for _, svc := range services {

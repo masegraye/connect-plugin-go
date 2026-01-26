@@ -64,7 +64,7 @@ func main() {
 	path, handler := connectpluginv1connect.NewPluginControlHandler(controlHandler)
 	mux.Handle(path, handler)
 
-	// Implement PluginIdentity service (for Model A)
+	// Implement PluginIdentity service (for Managed)
 	identityHandler := &pluginIdentityHandler{
 		client:   client,
 		metadata: client.Config().Metadata,
@@ -180,10 +180,10 @@ func (h *pluginIdentityHandler) SetRuntimeIdentity(
 	log.Printf("Received runtime identity: %s (token: %s...)",
 		req.Msg.RuntimeId, req.Msg.RuntimeToken[:8])
 
-	// Store runtime identity (Model A)
+	// Store runtime identity (Managed)
 	h.client.SetRuntimeIdentity(req.Msg.RuntimeId, req.Msg.RuntimeToken, req.Msg.HostUrl)
 
-	// Model A: Register services after receiving identity
+	// Managed: Register services after receiving identity
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		registerServices(context.Background(), h.client)

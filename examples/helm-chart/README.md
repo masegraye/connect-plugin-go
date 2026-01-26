@@ -242,7 +242,7 @@ All 4 containers run in the **same pod**:
 ### Container Startup Order
 
 1. **Init container** waits for host health check
-2. **Host** starts first (provides Phase 2 services)
+2. **Host** starts first (provides Service Registry services)
 3. **Logger, Storage, API** start in parallel as sidecars
 4. **Plugins self-register** with host via localhost:8080
 

@@ -1,6 +1,6 @@
 # Docker Compose Example: URL Shortener
 
-Complete docker-compose example demonstrating **Model B (self-registering)** deployment.
+Complete docker-compose example demonstrating **Unmanaged (self-registering)** deployment.
 
 ## Quick Start
 
@@ -47,7 +47,7 @@ Client (CLI) → API Plugin → Storage Plugin → Logger Plugin
 
 ### Services
 
-1. **host** (:8080) - Phase 2 platform with registry/lifecycle/router
+1. **host** (:8080) - Service Registry platform with registry/lifecycle/router
 2. **logger** (:8081) - Logging service (no deps)
 3. **storage** (:8082) - Key-value storage (requires logger)
 4. **api** (:8083) - HTTP API (requires storage)
@@ -183,7 +183,7 @@ Example output:
 
 ## What This Demonstrates
 
-✅ **Model B deployment** - Compose orchestrates, host doesn't manage processes
+✅ **Unmanaged deployment** - Compose orchestrates, host doesn't manage processes
 ✅ **Self-registration** - Plugins connect and register independently  
 ✅ **Compose simplicity** - Only plugin→host in depends_on
 ✅ **Host dependency graph** - Manages logger→storage→api internally

@@ -59,10 +59,10 @@ func main() {
 		if err := client.Connect(ctx); err != nil {
 			log.Fatalf("Failed to connect: %v", err)
 		}
-		log.Printf("Storage plugin started (Model B) with runtime_id: %s", client.RuntimeID())
+		log.Printf("Storage plugin started (Unmanaged) with runtime_id: %s", client.RuntimeID())
 		registerServices(ctx, client)
 	} else {
-		log.Printf("Storage plugin started (Model A) - waiting for host")
+		log.Printf("Storage plugin started (Managed) - waiting for host")
 	}
 
 	storage := &storageService{

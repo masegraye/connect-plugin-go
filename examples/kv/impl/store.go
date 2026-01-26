@@ -3,6 +3,7 @@ package kvimpl
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -43,6 +44,12 @@ func (s *Store) Get(ctx context.Context, req *connect.Request[kvv1.GetRequest]) 
 
 	value, found := s.data[req.Msg.Key]
 
+	if found {
+		log.Printf("[KV Server] GET %s → %s", req.Msg.Key, value)
+	} else {
+		log.Printf("[KV Server] GET %s → NOT FOUND", req.Msg.Key)
+	}
+
 	return connect.NewResponse(&kvv1.GetResponse{
 		Value: value,
 		Found: found,
@@ -59,6 +66,8 @@ func (s *Store) Put(ctx context.Context, req *connect.Request[kvv1.PutRequest]) 
 	}
 
 	s.data[req.Msg.Key] = req.Msg.Value
+
+	log.Printf("[KV Server] PUT %s = %s", req.Msg.Key, req.Msg.Value)
 
 	// Notify watchers
 	s.notifyWatchers(kvv1.WatchEvent{
@@ -77,6 +86,12 @@ func (s *Store) Delete(ctx context.Context, req *connect.Request[kvv1.DeleteRequ
 
 	_, found := s.data[req.Msg.Key]
 	delete(s.data, req.Msg.Key)
+
+	if found {
+		log.Printf("[KV Server] DELETE %s", req.Msg.Key)
+	} else {
+		log.Printf("[KV Server] DELETE %s → NOT FOUND", req.Msg.Key)
+	}
 
 	// Notify watchers
 	if found {
