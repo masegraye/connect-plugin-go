@@ -59,17 +59,31 @@ func main() {
 		// Provide plugin launcher
 		fx.Provide(func(platform *connectplugin.Platform, registry *connectplugin.ServiceRegistry, lc fx.Lifecycle) *connectplugin.PluginLauncher {
 			launcher := connectplugin.NewPluginLauncher(platform, registry)
+
+			// Register BOTH strategies to demonstrate mixing
 			launcher.RegisterStrategy(connectplugin.NewProcessStrategy())
+			launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy())
 
 			launcher.Configure(map[string]connectplugin.PluginSpec{
+				// Process-based plugin
 				"kv-server": {
 					Name:       "kv-server",
 					Provides:   []string{"kv"},
-					Strategy:   "process",
+					Strategy:   "process",  // ← Process strategy
 					BinaryPath: "./dist/kv-server",
 					HostURL:    "http://localhost:9080",
 					Port:       9081,
 				},
+				// In-memory plugin (future - needs impl factory)
+				// "cache-inmemory": {
+				//     Name:     "cache-inmemory",
+				//     Provides: []string{"cache"},
+				//     Strategy: "in-memory",  // ← In-memory strategy
+				//     Plugin:   &cacheplugin.CachePlugin{},
+				//     ImplFactory: func() any { return &CacheImpl{} },
+				//     HostURL:  "http://localhost:9080",
+				//     Port:     9082,
+				// },
 			})
 
 			lc.Append(fx.Hook{
