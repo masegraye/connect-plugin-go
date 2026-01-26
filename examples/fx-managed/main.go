@@ -21,22 +21,52 @@ func main() {
 	app := fx.New(
 		// === Infrastructure ===
 
-		// Provide host platform
-		fx.Provide(func() (*connectplugin.Platform, *connectplugin.ServiceRegistry) {
+		// Provide host platform (starts eagerly so plugins can connect)
+		fx.Provide(func(lc fx.Lifecycle) (*connectplugin.Platform, *connectplugin.ServiceRegistry) {
 			handshake := connectplugin.NewHandshakeServer(&connectplugin.ServeConfig{})
 			lifecycle := connectplugin.NewLifecycleServer()
 			registry := connectplugin.NewServiceRegistry(lifecycle)
 			router := connectplugin.NewServiceRouter(handshake, registry, lifecycle)
 			platform := connectplugin.NewPlatform(registry, lifecycle, router)
 
+			// Start host server eagerly (so plugins can connect during Provide phase)
+			mux := http.NewServeMux()
+
+			handshakePath, handshakeHandler := connectpluginv1connect.NewHandshakeServiceHandler(handshake)
+			mux.Handle(handshakePath, handshakeHandler)
+
+			lifecyclePath, lifecycleHandler := connectpluginv1connect.NewPluginLifecycleHandler(lifecycle)
+			mux.Handle(lifecyclePath, lifecycleHandler)
+
+			registryPath, registryHandler := connectpluginv1connect.NewServiceRegistryHandler(registry)
+			mux.Handle(registryPath, registryHandler)
+
+			mux.Handle("/services/", platform.Router())
+
+			server := &http.Server{
+				Addr:    ":9080",
+				Handler: mux,
+			}
+
+			go server.ListenAndServe()
+			time.Sleep(200 * time.Millisecond)  // Wait for ready
+			log.Println("✓ Host platform started on :9080")
+
+			// Register shutdown hook
+			lc.Append(fx.Hook{
+				OnStop: func(ctx context.Context) error {
+					return server.Shutdown(ctx)
+				},
+			})
+
 			return platform, registry
 		}),
 
 		// Provide plugin launcher with strategies
-		fx.Provide(func(platform *connectplugin.Platform, registry *connectplugin.ServiceRegistry) *connectplugin.PluginLauncher {
+		fx.Provide(func(platform *connectplugin.Platform, registry *connectplugin.ServiceRegistry, lc fx.Lifecycle) *connectplugin.PluginLauncher {
 			launcher := connectplugin.NewPluginLauncher(platform, registry)
 
-			// Register both strategies
+			// Register strategies
 			launcher.RegisterStrategy(connectplugin.NewProcessStrategy())
 			launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy())
 
@@ -45,121 +75,22 @@ func main() {
 				"logger-plugin": {
 					Name:       "logger-plugin",
 					Provides:   []string{"logger"},
-					Strategy:   "process",  // ← Process-based (child process)
+					Strategy:   "process",
 					BinaryPath: "./dist/logger-plugin",
-					HostURL:    "http://localhost:9080",  // Host running on :9080
+					HostURL:    "http://localhost:9080",
 					Port:       9081,
 				},
 				"cache-plugin": {
 					Name:       "cache-plugin",
 					Provides:   []string{"cache"},
-					Strategy:   "process",  // ← Also process-based
+					Strategy:   "process",
 					BinaryPath: "./dist/cache-plugin",
-					HostURL:    "http://localhost:9080",  // Host running on :9080
+					HostURL:    "http://localhost:9080",
 					Port:       9082,
 				},
 			})
 
-			return launcher
-		}),
-
-		// === Start Host Platform Server ===
-
-		fx.Invoke(func(lc fx.Lifecycle, platform *connectplugin.Platform, registry *connectplugin.ServiceRegistry) {
-			var server *http.Server
-
-			lc.Append(fx.Hook{
-				OnStart: func(ctx context.Context) error {
-					mux := http.NewServeMux()
-
-					// Register Service Registry services
-					handshakePath, handshakeHandler := connectpluginv1connect.NewHandshakeServiceHandler(
-						connectplugin.NewHandshakeServer(&connectplugin.ServeConfig{}))
-					mux.Handle(handshakePath, handshakeHandler)
-
-					lifecyclePath, lifecycleHandler := connectpluginv1connect.NewPluginLifecycleHandler(
-						platform.Lifecycle())
-					mux.Handle(lifecyclePath, lifecycleHandler)
-
-					registryPath, registryHandler := connectpluginv1connect.NewServiceRegistryHandler(registry)
-					mux.Handle(registryPath, registryHandler)
-
-					mux.Handle("/services/", platform.Router())
-
-					server = &http.Server{
-						Addr:    ":9080",
-						Handler: mux,
-					}
-
-					go server.ListenAndServe()
-
-					// Wait for server to be ready
-					time.Sleep(200 * time.Millisecond)
-					log.Println("✓ Host platform started on :9080")
-
-					return nil
-				},
-				OnStop: func(ctx context.Context) error {
-					if server != nil {
-						return server.Shutdown(ctx)
-					}
-					return nil
-				},
-			})
-		}),
-
-		// === Launch Plugins and Demonstrate ===
-
-		fx.Invoke(func(lc fx.Lifecycle, shutdowner fx.Shutdowner, launcher *connectplugin.PluginLauncher) {
-			lc.Append(fx.Hook{
-				OnStart: func(ctx context.Context) error {
-					log.Println()
-					log.Println("=== Launching Plugins via fx ===")
-
-					// Launch logger plugin (process strategy)
-					log.Println("fx requesting Logger service...")
-					loggerEndpoint, err := launcher.GetService("logger-plugin", "logger")
-					if err != nil {
-						return fmt.Errorf("failed to launch logger: %w", err)
-					}
-					log.Printf("✓ Logger available at: %s", loggerEndpoint)
-
-					// Launch cache plugin (process strategy)
-					// Cache depends on logger (via Service Registry, not fx DI)
-					log.Println("fx requesting Cache service...")
-					cacheEndpoint, err := launcher.GetService("cache-plugin", "cache")
-					if err != nil {
-						return fmt.Errorf("failed to launch cache: %w", err)
-					}
-					log.Printf("✓ Cache available at: %s", cacheEndpoint)
-
-					// Give plugins time to fully register and report health
-					time.Sleep(1 * time.Second)
-
-					log.Println()
-					log.Println("=== Plugin Status ===")
-					log.Println("✓ Logger plugin running (process strategy)")
-					log.Println("✓ Cache plugin running (process strategy)")
-					log.Println("✓ Both plugins registered with Service Registry")
-					log.Println("✓ Cache discovered logger via Service Registry")
-					log.Println()
-					log.Println("=== fx-managed demonstration complete! ===")
-					log.Println("  - fx orchestrated plugin startup (unmanaged deployment)")
-					log.Println("  - Plugins started as child processes")
-					log.Println("  - Plugins self-registered with host")
-					log.Println("  - PluginLauncher with ProcessStrategy")
-					log.Println("  - Service Registry handled plugin dependencies")
-					log.Println()
-
-					// Shutdown after demo
-					return shutdowner.Shutdown()
-				},
-			})
-		}),
-
-		// === Cleanup Plugins ===
-
-		fx.Invoke(func(lc fx.Lifecycle, launcher *connectplugin.PluginLauncher) {
+			// Register cleanup
 			lc.Append(fx.Hook{
 				OnStop: func(ctx context.Context) error {
 					log.Println("Shutting down plugins...")
@@ -167,7 +98,92 @@ func main() {
 					return nil
 				},
 			})
+
+			return launcher
 		}),
+
+		// === Provide Plugin Services as fx Types ===
+
+		// Provide Logger endpoint (launcher starts logger-plugin)
+		fx.Provide(fx.Annotate(
+			func(launcher *connectplugin.PluginLauncher) (string, error) {
+				log.Println("fx providing Logger service...")
+				endpoint, err := launcher.GetService("logger-plugin", "logger")
+				if err != nil {
+					return "", fmt.Errorf("failed to get logger: %w", err)
+				}
+				log.Printf("✓ Logger endpoint: %s", endpoint)
+				return endpoint, nil
+			},
+			fx.ResultTags(`name:"loggerEndpoint"`),
+		)),
+
+		// Provide Cache endpoint (launcher starts cache-plugin)
+		fx.Provide(fx.Annotate(
+			func(launcher *connectplugin.PluginLauncher) (string, error) {
+				log.Println("fx providing Cache service...")
+				endpoint, err := launcher.GetService("cache-plugin", "cache")
+				if err != nil {
+					return "", fmt.Errorf("failed to get cache: %w", err)
+				}
+				log.Printf("✓ Cache endpoint: %s", endpoint)
+				return endpoint, nil
+			},
+			fx.ResultTags(`name:"cacheEndpoint"`),
+		)),
+
+		// === Application Code ===
+		// In real app, you'd provide typed interfaces here:
+		//
+		// fx.Provide(func(endpoint loggerEndpoint) (Logger, error) {
+		//     return loggerv1connect.NewLoggerClient(httpClient, endpoint), nil
+		// })
+		//
+		// Then app code just uses:
+		// fx.Invoke(func(logger Logger, cache Cache) {
+		//     logger.Log("message")  // Doesn't know it's a plugin!
+		// })
+
+		fx.Invoke(fx.Annotate(
+			func(shutdowner fx.Shutdowner, loggerEndpoint, cacheEndpoint string) error {
+				// Give plugins time to register and report health
+				time.Sleep(1 * time.Second)
+
+				log.Println()
+				log.Println("=== Plugin Status ===")
+				log.Println("✓ Logger plugin running (process strategy)")
+				log.Println("✓ Cache plugin running (process strategy)")
+				log.Println("✓ Both self-registered with Service Registry")
+				log.Println("✓ Cache discovered logger via Service Registry")
+				log.Println()
+				log.Println("=== Application receives typed services ===")
+				log.Printf("  loggerEndpoint: %s", loggerEndpoint)
+				log.Printf("  cacheEndpoint: %s", cacheEndpoint)
+				log.Println()
+				log.Println("In production, wrap as typed interfaces:")
+				log.Println("  fx.Provide(func(endpoint loggerEndpoint) (Logger, error) {")
+				log.Println("    return loggerv1connect.NewLoggerClient(http, endpoint), nil")
+				log.Println("  })")
+				log.Println()
+				log.Println("Then application code is plugin-agnostic:")
+				log.Println("  fx.Invoke(func(logger Logger, cache Cache) {")
+				log.Println("    logger.Log(\"msg\")  // Doesn't know it's a plugin!")
+				log.Println("    cache.Set(\"k\", \"v\")")
+				log.Println("  })")
+				log.Println()
+				log.Println("=== fx-managed demonstration complete! ===")
+				log.Println("  - fx orchestrated plugin startup (unmanaged deployment)")
+				log.Println("  - PluginLauncher started child processes")
+				log.Println("  - Plugins self-registered with host")
+				log.Println("  - ProcessStrategy used")
+				log.Println("  - Service Registry handled dependencies")
+				log.Println("  - Application receives plugin services via fx DI")
+				log.Println()
+
+				return shutdowner.Shutdown()
+			},
+			fx.ParamTags(``, `name:"loggerEndpoint"`, `name:"cacheEndpoint"`),
+		)),
 	)
 
 	app.Run()
