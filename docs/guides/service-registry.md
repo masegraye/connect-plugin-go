@@ -1,4 +1,4 @@
-# Phase 2: Service Registry Guide
+# Service Registry Guide
 
 The Service Registry enables plugins to provide and consume services from each other, creating a coordinated multi-plugin platform.
 

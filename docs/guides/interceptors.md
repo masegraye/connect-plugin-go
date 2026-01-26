@@ -140,9 +140,11 @@ Closed ────────────────────────�
                                      └──> Open
 ```
 
-**Closed**: Normal operation, track failures
-**Open**: Reject all calls immediately (fail fast)
-**HalfOpen**: Allow probe requests to test recovery
+**States:**
+
+- **Closed**: Normal operation, track failures
+- **Open**: Reject all calls immediately (fail fast)
+- **HalfOpen**: Allow probe requests to test recovery
 
 ### Basic Usage
 

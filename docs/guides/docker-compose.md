@@ -6,7 +6,7 @@ Complete guide to deploying connect-plugin-go with Docker Compose using the URL 
 
 The `examples/docker-compose/` directory contains a production-like deployment demonstrating:
 
-- **Model B (self-registering)** plugins
+- **Unmanaged (self-registering)** plugins
 - Plugin-to-plugin communication via host-mediated routing
 - Service discovery across containers
 - Health-based readiness and graceful degradation
@@ -291,7 +291,7 @@ docker-compose logs api | grep -E "(degraded|healthy)"
 
 ## Key Features Demonstrated
 
-### ✅ Model B Deployment
+### ✅ Unmanaged Deployment
 
 Plugins are **self-registering** - they connect to the host independently:
 
@@ -412,7 +412,7 @@ spec:
           value: "8082"
 ```
 
-Same Model B self-registration pattern!
+Same Unmanaged self-registration pattern!
 
 ## Troubleshooting
 
@@ -508,7 +508,7 @@ services:
 
 ## Next Steps
 
-- [Deployment Models](../getting-started/deployment-models.md) - Understand Model A vs Model B
+- [Deployment Models](../getting-started/deployment-models.md) - Understand Model A vs Unmanaged
 - [Service Registry](service-registry.md) - Deep dive into plugin-to-plugin communication
 - [Interceptors](interceptors.md) - Add retry, circuit breaker, auth
 - Migrate to Kubernetes - Same plugins, different orchestrator
