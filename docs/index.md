@@ -104,6 +104,22 @@ value, _ := kvStore.Get(context.Background(), "mykey")
 
 ## Examples
 
+### Kubernetes Helm Chart
+
+Demonstrates **unmanaged deployment** with Kubernetes sidecar pattern (4 containers in 1 pod):
+
+```bash
+cd examples/helm-chart
+./setup.sh   # Build and push images
+./install.sh # Deploy to K8s
+./test.sh    # Validate
+./cleanup.sh # Remove
+```
+
+Shows sidecar pattern with localhost plugin communication.
+
+See [Kubernetes Guide](guides/kubernetes.md) for details.
+
 ### Docker Compose URL Shortener
 
 Complete containerized example demonstrating **unmanaged deployment** (docker-compose orchestrates lifecycle):
@@ -140,6 +156,7 @@ See [KV Example Walkthrough](guides/kv-example.md).
 
 - [Quick Start Guide](getting-started/quickstart.md)
 - [Deployment Models](getting-started/deployment-models.md)
+- [Kubernetes Guide](guides/kubernetes.md)
 - [Docker Compose Guide](guides/docker-compose.md)
 - [Service Registry Guide](guides/service-registry.md)
 
