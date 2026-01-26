@@ -281,7 +281,7 @@ The repository includes comprehensive examples in `examples/`:
 
 ### Docker Compose URL Shortener (Recommended)
 
-Complete containerized example demonstrating Model B deployment:
+Complete containerized example demonstrating Unmanaged deployment:
 
 ```bash
 cd examples/docker-compose

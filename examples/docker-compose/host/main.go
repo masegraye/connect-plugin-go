@@ -1,5 +1,5 @@
 // Package main implements the host platform for the docker-compose example.
-// Provides Phase 2 services: handshake, lifecycle, registry, router.
+// Provides Service Registry services: handshake, lifecycle, registry, router.
 package main
 
 import (

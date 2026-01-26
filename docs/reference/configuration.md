@@ -11,10 +11,10 @@ type ClientConfig struct {
     // Endpoint is the plugin service URL (required if no Discovery)
     Endpoint string
 
-    // HostURL is an alias for Endpoint (Phase 2 naming)
+    // HostURL is an alias for Endpoint 
     HostURL string
 
-    // Plugins defines available plugin types (optional for Phase 2 service providers)
+    // Plugins defines available plugin types (optional for Service Registry providers)
     Plugins PluginSet
 
     // ProtocolVersion is the application protocol version (default: 1)
@@ -24,13 +24,13 @@ type ClientConfig struct {
     MagicCookieKey   string
     MagicCookieValue string
 
-    // Phase 2: SelfID is the plugin's self-declared identity
+    // Service Registry: SelfID is the plugin's self-declared identity
     SelfID string
 
-    // Phase 2: SelfVersion is the plugin's version
+    // Service Registry: SelfVersion is the plugin's version
     SelfVersion string
 
-    // Phase 2: Metadata describes services provided/required
+    // Service Registry: Metadata describes services provided/required
     Metadata PluginMetadata
 
     // Discovery service for dynamic endpoint discovery (optional)
@@ -54,7 +54,7 @@ client, _ := connectplugin.NewClient(connectplugin.ClientConfig{
 })
 ```
 
-**Service provider (Phase 2, Model B):**
+**Service provider (Unmanaged deployment):**
 
 ```go
 client, _ := connectplugin.NewClient(connectplugin.ClientConfig{
@@ -114,13 +114,13 @@ type ServeConfig struct {
     // CapabilityHandlers are HTTP handlers for capabilities (optional)
     CapabilityHandlers map[string]http.Handler
 
-    // Phase 2: LifecycleService for health reporting (optional)
+    // Service Registry: LifecycleService for health reporting (optional)
     LifecycleService *LifecycleServer
 
-    // Phase 2: ServiceRegistry for service registration (optional)
+    // Service Registry: ServiceRegistry for service registration (optional)
     ServiceRegistry *ServiceRegistry
 
-    // Phase 2: ServiceRouter for plugin-to-plugin routing (optional)
+    // Service Registry: ServiceRouter for plugin-to-plugin routing (optional)
     ServiceRouter *ServiceRouter
 }
 ```
@@ -162,7 +162,7 @@ server := connectplugin.Serve(&connectplugin.ServeConfig{
 })
 ```
 
-**Phase 2 host platform:**
+**Service Registry host platform:**
 
 ```go
 handshake := connectplugin.NewHandshakeServer(&connectplugin.ServeConfig{})
@@ -181,7 +181,7 @@ http.ListenAndServe(":8080", mux)
 
 ## PluginMetadata
 
-Metadata describing plugin services (Phase 2):
+Metadata describing plugin services :
 
 ```go
 type PluginMetadata struct {
@@ -189,10 +189,10 @@ type PluginMetadata struct {
     Path    string                // Service path
     Version string                // Plugin version
 
-    // Phase 2: Services provided
+    // Service Registry: Services provided
     Provides []ServiceDeclaration
 
-    // Phase 2: Services required
+    // Service Registry: Services required
     Requires []ServiceDependency
 }
 
@@ -261,7 +261,7 @@ config := connectplugin.DefaultCircuitBreakerConfig()
 
 ## PluginConfig
 
-Configuration for Platform.AddPlugin() (Model A):
+Configuration for Platform.AddPlugin() (Managed):
 
 ```go
 type PluginConfig struct {
@@ -279,7 +279,7 @@ Standard environment variables for plugins:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `PORT` | Plugin listen port | `8082` |
-| `HOST_URL` | Host platform URL (Model B) | `http://localhost:8080` |
+| `HOST_URL` | Host platform URL (Unmanaged) | `http://localhost:8080` |
 | `ENV` | Environment name | `production` |
 | `LOG_LEVEL` | Logging level | `info` |
 
@@ -288,15 +288,15 @@ Standard environment variables for plugins:
 ```go
 hostURL := os.Getenv("HOST_URL")
 if hostURL == "" {
-    // Model A: Platform-managed
+    // Managed: Platform-managed
 } else {
-    // Model B: Self-registering
+    // Unmanaged: Self-registering
 }
 ```
 
 ## Selection Strategies
 
-Host-controlled provider selection (Phase 2):
+Host-controlled provider selection :
 
 ```go
 type SelectionStrategy int
@@ -314,7 +314,7 @@ registry.SetSelectionStrategy("logger", connectplugin.SelectionRoundRobin)
 
 ## Health States
 
-Three-state health model (Phase 2):
+Three-state health model :
 
 ```go
 type HealthState int32

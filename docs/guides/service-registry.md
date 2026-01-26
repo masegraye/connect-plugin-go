@@ -4,7 +4,7 @@ The Service Registry enables plugins to provide and consume services from each o
 
 ## Live Example
 
-See Phase 2 in action with the **Docker Compose URL Shortener** example:
+See the Service Registry in action with the **Docker Compose URL Shortener** example:
 
 ```bash
 cd examples/docker-compose
@@ -21,7 +21,7 @@ See [Docker Compose Guide](docker-compose.md) for details.
 
 ## Overview
 
-Phase 2 adds plugin-to-plugin communication:
+The Service Registry adds plugin-to-plugin communication:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -316,7 +316,7 @@ err := platform.AddPlugin(ctx, connectplugin.PluginConfig{
 
 Platform orchestrates:
 1. Validate dependencies available
-2. Call GetPluginInfo() (Model A)
+2. Call GetPluginInfo() (Managed)
 3. Assign runtime_id and token
 4. Wait for service registration
 5. Wait for healthy state

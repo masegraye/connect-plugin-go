@@ -77,7 +77,7 @@ cd examples/docker-compose
 ```yaml
 services:
   host:
-    # Starts first, exposes Phase 2 services
+    # Starts first, exposes Service Registry services
 
   logger:
     depends_on: [host]  # Only knows about host!
@@ -508,7 +508,7 @@ services:
 
 ## Next Steps
 
-- [Deployment Models](../getting-started/deployment-models.md) - Understand Model A vs Unmanaged
+- [Deployment Models](../getting-started/deployment-models.md) - Understand Managed vs Unmanaged
 - [Service Registry](service-registry.md) - Deep dive into plugin-to-plugin communication
 - [Interceptors](interceptors.md) - Add retry, circuit breaker, auth
 - Migrate to Kubernetes - Same plugins, different orchestrator

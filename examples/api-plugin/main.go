@@ -60,10 +60,10 @@ func main() {
 		if err := client.Connect(ctx); err != nil {
 			log.Fatalf("Failed to connect: %v", err)
 		}
-		log.Printf("API plugin started (Model B) with runtime_id: %s", client.RuntimeID())
+		log.Printf("API plugin started (Unmanaged) with runtime_id: %s", client.RuntimeID())
 		registerServices(ctx, client)
 	} else {
-		log.Printf("API plugin started (Model A) - waiting for host")
+		log.Printf("API plugin started (Managed) - waiting for host")
 	}
 
 	api := &apiService{client: client}

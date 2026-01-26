@@ -57,10 +57,10 @@ Before any plugin communication, host and plugin perform a handshake to:
 
 - Negotiate protocol versions
 - Exchange magic cookies for basic validation
-- Assign runtime identity (Phase 2)
-- Declare service capabilities (Phase 2)
+- Assign runtime identity 
+- Declare service capabilities 
 
-### Service Registry (Phase 2)
+### Service Registry 
 
 Plugins can provide and consume services from each other:
 
@@ -74,7 +74,7 @@ Plugins can provide and consume services from each other:
 
 connect-plugin-go supports two deployment models:
 
-### Model A: Platform-Managed Plugins
+### Managed: Platform-Managed Plugins
 
 The host platform orchestrates plugin lifecycle:
 
@@ -89,7 +89,7 @@ The host platform orchestrates plugin lifecycle:
 
 **Use case**: Traditional plugin architectures, local development, trusted plugins.
 
-### Model B: Self-Registering Plugins
+### Unmanaged: Self-Registering Plugins
 
 External orchestrator (Kubernetes, docker-compose) manages plugins:
 

@@ -56,17 +56,17 @@ func main() {
 
 	ctx := context.Background()
 
-	// Model B: Connect and register immediately
+	// Unmanaged: Connect and register immediately
 	if modelB {
 		if err := client.Connect(ctx); err != nil {
 			log.Fatalf("Failed to connect: %v", err)
 		}
-		log.Printf("Cache plugin started (Model B) with runtime_id: %s", client.RuntimeID())
+		log.Printf("Cache plugin started (Unmanaged) with runtime_id: %s", client.RuntimeID())
 
 		// Register services immediately
 		registerServices(ctx, client)
 	} else {
-		log.Printf("Cache plugin started (Model A) - waiting for host to assign identity")
+		log.Printf("Cache plugin started (Managed) - waiting for host to assign identity")
 	}
 
 	// Start HTTP server
@@ -77,7 +77,7 @@ func main() {
 	path, handler := connectpluginv1connect.NewPluginControlHandler(controlHandler)
 	mux.Handle(path, handler)
 
-	// Implement PluginIdentity service (for Model A)
+	// Implement PluginIdentity service (for Managed)
 	identityHandler := &pluginIdentityHandler{
 		client:   client,
 		metadata: client.Config().Metadata,
@@ -208,10 +208,10 @@ func (h *pluginIdentityHandler) SetRuntimeIdentity(
 	log.Printf("Received runtime identity: %s (token: %s...)",
 		req.Msg.RuntimeId, req.Msg.RuntimeToken[:8])
 
-	// Store runtime identity (Model A)
+	// Store runtime identity (Managed)
 	h.client.SetRuntimeIdentity(req.Msg.RuntimeId, req.Msg.RuntimeToken, req.Msg.HostUrl)
 
-	// Model A: Register services after receiving identity
+	// Managed: Register services after receiving identity
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		registerServices(context.Background(), h.client)
