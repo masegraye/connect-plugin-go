@@ -1,0 +1,94 @@
+# Default values for url-shortener helm chart
+
+# Replica count for the deployment
+replicaCount: 1
+
+# Image configuration
+# Note: Use docker-compose images or push to your registry
+image:
+  # Image repository prefix (change to your registry)
+  repository: localhost:5001
+  pullPolicy: IfNotPresent
+  # Tag defaults to chart appVersion if not set
+  tag: ""
+
+# Image names for each container
+images:
+  host: plugin-platform
+  logger: logger-plugin
+  storage: storage-plugin
+  api: api-plugin
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8083
+  targetPort: 8083
+
+# Resource limits and requests for each container
+resources:
+  host:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 64Mi
+  logger:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 50m
+      memory: 32Mi
+  storage:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 50m
+      memory: 32Mi
+  api:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 64Mi
+
+# Liveness and readiness probe configuration
+probes:
+  host:
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 2
+      periodSeconds: 5
+
+  # Plugins don't have health endpoints (checked via host lifecycle)
+  # Could add in future
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext: {}
+
+# Container security context
+securityContext: {}
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
