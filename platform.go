@@ -62,7 +62,22 @@ func NewPlatform(
 	}
 }
 
-// AddPlugin adds a plugin to the platform at runtime (Model A: platform-managed).
+// Registry returns the service registry.
+func (p *Platform) Registry() *ServiceRegistry {
+	return p.registry
+}
+
+// Lifecycle returns the lifecycle server.
+func (p *Platform) Lifecycle() *LifecycleServer {
+	return p.lifecycleServer
+}
+
+// Router returns the service router.
+func (p *Platform) Router() *ServiceRouter {
+	return p.router
+}
+
+// AddPlugin adds a plugin to the platform at runtime (managed deployment).
 // The platform calls the plugin's PluginIdentity service to coordinate registration.
 func (p *Platform) AddPlugin(ctx context.Context, config PluginConfig) error {
 	// 1. Call plugin's GetPluginInfo() to retrieve metadata
