@@ -23,32 +23,13 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 
-      # Init container to ensure host starts first
-      initContainers:
-      - name: wait-for-host
-        image: busybox:1.36
-        command:
-        - sh
-        - -c
-        - |
-          echo "Waiting for host platform to be ready..."
-          until wget -q -O- http://localhost:8080/health 2>/dev/null; do
-            echo "Host not ready, waiting..."
-            sleep 2
-          done
-          echo "Host is ready!"
-        {{- with .Values.securityContext }}
-        securityContext:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-
       containers:
       # Container 1: Host Platform (starts first, provides Phase 2 services)
       - name: host
-        image: "{{ .Values.image.repository }}/{{ .Values.images.host }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.host }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
-        - name: http
+        - name: host-http
           containerPort: 8080
           protocol: TCP
         env:
@@ -73,10 +54,10 @@ spec:
 
       # Sidecar 1: Logger Plugin (no dependencies)
       - name: logger
-        image: "{{ .Values.image.repository }}/{{ .Values.images.logger }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.logger }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
-        - name: http
+        - name: logger-http
           containerPort: 8081
           protocol: TCP
         env:
@@ -97,10 +78,10 @@ spec:
 
       # Sidecar 2: Storage Plugin (requires logger)
       - name: storage
-        image: "{{ .Values.image.repository }}/{{ .Values.images.storage }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.storage }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
-        - name: http
+        - name: storage-http
           containerPort: 8082
           protocol: TCP
         env:
@@ -121,10 +102,10 @@ spec:
 
       # Sidecar 3: API Plugin (requires storage)
       - name: api
-        image: "{{ .Values.image.repository }}/{{ .Values.images.api }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        image: "{{ if .Values.image.repository }}{{ .Values.image.repository }}/{{ end }}{{ .Values.images.api }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
-        - name: http
+        - name: api-http
           containerPort: 8083
           protocol: TCP
         env:

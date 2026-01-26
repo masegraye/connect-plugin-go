@@ -4,20 +4,19 @@
 replicaCount: 1
 
 # Image configuration
-# Note: Use docker-compose images or push to your registry
 image:
-  # Image repository prefix (change to your registry)
-  repository: localhost:5001
+  # Docker Hub repository prefix
+  repository: "masongraye827"
   pullPolicy: IfNotPresent
   # Tag defaults to chart appVersion if not set
-  tag: ""
+  tag: "latest"
 
-# Image names for each container
+# Image names for each container (with cpg- prefix)
 images:
-  host: plugin-platform
-  logger: logger-plugin
-  storage: storage-plugin
-  api: api-plugin
+  host: cpg-platform
+  logger: cpg-logger-plugin
+  storage: cpg-storage-plugin
+  api: cpg-api-plugin
 
 # Service configuration
 service:

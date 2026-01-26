@@ -18,7 +18,7 @@ echo ""
 
 # Port-forward in background
 echo "Setting up port-forward..."
-kubectl port-forward pod/$POD 8083:8083 > /dev/null 2>&1 &
+kubectl port-forward svc/url-shortener 8083:8083 > /dev/null 2>&1 &
 PF_PID=$!
 
 # Cleanup function
@@ -30,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Wait for port-forward to be ready
-sleep 2
+sleep 3
 
 # Test 1: Shorten URL
 echo "Test 1: Shorten URL"
@@ -40,8 +40,8 @@ echo ""
 SHORTEN_RESPONSE=$(curl -s -X POST "http://localhost:8083/api.v1.API/Shorten?url=https://github.com/masegraye/connect-plugin-go")
 echo "$SHORTEN_RESPONSE"
 
-# Extract short code
-SHORT_CODE=$(echo "$SHORTEN_RESPONSE" | grep -o '"short_code":"[^"]*"' | cut -d'"' -f4)
+# Extract short code (handles spaces in JSON)
+SHORT_CODE=$(echo "$SHORTEN_RESPONSE" | grep -o '"short_code": *"[^"]*"' | cut -d'"' -f4)
 
 if [ -z "$SHORT_CODE" ]; then
     echo ""
