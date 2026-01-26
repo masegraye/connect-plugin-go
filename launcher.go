@@ -90,8 +90,8 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 		instance = l.instances[pluginName]
 	}
 
-	// 4. Discover specific service from registry
-	// Plugin has self-registered, so service should be available
+	// 4. Verify service is registered (optional check)
+	// Plugin should have self-registered this service
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -100,15 +100,15 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 		MinVersion:  "",
 	})
 
-	discResp, err := l.registry.DiscoverService(ctx, discReq)
+	_, err := l.registry.DiscoverService(ctx, discReq)
 	if err != nil {
 		return "", fmt.Errorf("service %q not found in registry: %w", serviceType, err)
 	}
 
-	// 5. Return service endpoint URL
-	// Caller creates typed client: loggerv1connect.NewLoggerClient(httpClient, endpoint)
-	baseURL := instance.endpoint
-	return baseURL + discResp.Msg.Endpoint.EndpointUrl, nil
+	// 5. Return plugin's base endpoint URL
+	// Caller creates typed client that talks directly to plugin
+	// For host→plugin calls, use direct endpoint (not routed)
+	return instance.endpoint, nil
 }
 
 // launchPluginLocked launches a plugin using its configured strategy.

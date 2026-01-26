@@ -126,6 +126,11 @@ tasks:
       - go build -o dist/logger-plugin ./examples/logger-plugin
       - go build -o dist/cache-plugin ./examples/cache-plugin
       - go build -o dist/app-plugin ./examples/app-plugin
+      - go build -o dist/storage-plugin ./examples/storage-plugin
+      - go build -o dist/api-plugin ./examples/api-plugin
+      - go build -o dist/platform-host ./examples/docker-compose/host
+      - go build -o dist/url-client ./examples/url-client
+      - go build -o dist/fx-managed ./examples/fx-managed
 
   # Manual example runners (for development)
   example:server:
@@ -145,6 +150,12 @@ tasks:
     deps: [build-examples]
     cmds:
       - ./dist/kv-host-watch
+
+  example:fx-managed:
+    desc: Run fx-managed example (unmanaged deployment with fx)
+    deps: [build-examples]
+    cmds:
+      - ./dist/fx-managed
 
   # Integration tests (automated with integ-test CLI)
   integ:kv:test:

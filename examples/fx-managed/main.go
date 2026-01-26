@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"time"
 
+	"connectrpc.com/connect"
 	connectplugin "github.com/masegraye/connect-plugin-go"
+	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
+	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
 	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 	"go.uber.org/fx"
 )
@@ -21,7 +24,7 @@ func main() {
 	app := fx.New(
 		// === Infrastructure ===
 
-		// Provide host platform (starts eagerly so plugins can connect)
+		// Provide host platform
 		fx.Provide(func(lc fx.Lifecycle) (*connectplugin.Platform, *connectplugin.ServiceRegistry) {
 			handshake := connectplugin.NewHandshakeServer(&connectplugin.ServeConfig{})
 			lifecycle := connectplugin.NewLifecycleServer()
@@ -29,30 +32,21 @@ func main() {
 			router := connectplugin.NewServiceRouter(handshake, registry, lifecycle)
 			platform := connectplugin.NewPlatform(registry, lifecycle, router)
 
-			// Start host server eagerly (so plugins can connect during Provide phase)
+			// Start host server eagerly
 			mux := http.NewServeMux()
-
 			handshakePath, handshakeHandler := connectpluginv1connect.NewHandshakeServiceHandler(handshake)
 			mux.Handle(handshakePath, handshakeHandler)
-
 			lifecyclePath, lifecycleHandler := connectpluginv1connect.NewPluginLifecycleHandler(lifecycle)
 			mux.Handle(lifecyclePath, lifecycleHandler)
-
 			registryPath, registryHandler := connectpluginv1connect.NewServiceRegistryHandler(registry)
 			mux.Handle(registryPath, registryHandler)
-
 			mux.Handle("/services/", platform.Router())
 
-			server := &http.Server{
-				Addr:    ":9080",
-				Handler: mux,
-			}
-
+			server := &http.Server{Addr: ":9080", Handler: mux}
 			go server.ListenAndServe()
-			time.Sleep(200 * time.Millisecond)  // Wait for ready
+			time.Sleep(200 * time.Millisecond)
 			log.Println("✓ Host platform started on :9080")
 
-			// Register shutdown hook
 			lc.Append(fx.Hook{
 				OnStop: func(ctx context.Context) error {
 					return server.Shutdown(ctx)
@@ -62,35 +56,22 @@ func main() {
 			return platform, registry
 		}),
 
-		// Provide plugin launcher with strategies
+		// Provide plugin launcher
 		fx.Provide(func(platform *connectplugin.Platform, registry *connectplugin.ServiceRegistry, lc fx.Lifecycle) *connectplugin.PluginLauncher {
 			launcher := connectplugin.NewPluginLauncher(platform, registry)
-
-			// Register strategies
 			launcher.RegisterStrategy(connectplugin.NewProcessStrategy())
-			launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy())
 
-			// Configure plugins
 			launcher.Configure(map[string]connectplugin.PluginSpec{
-				"logger-plugin": {
-					Name:       "logger-plugin",
-					Provides:   []string{"logger"},
+				"kv-server": {
+					Name:       "kv-server",
+					Provides:   []string{"kv"},
 					Strategy:   "process",
-					BinaryPath: "./dist/logger-plugin",
+					BinaryPath: "./dist/kv-server",
 					HostURL:    "http://localhost:9080",
 					Port:       9081,
 				},
-				"cache-plugin": {
-					Name:       "cache-plugin",
-					Provides:   []string{"cache"},
-					Strategy:   "process",
-					BinaryPath: "./dist/cache-plugin",
-					HostURL:    "http://localhost:9080",
-					Port:       9082,
-				},
 			})
 
-			// Register cleanup
 			lc.Append(fx.Hook{
 				OnStop: func(ctx context.Context) error {
 					log.Println("Shutting down plugins...")
@@ -102,87 +83,94 @@ func main() {
 			return launcher
 		}),
 
-		// === Provide Plugin Services as fx Types ===
+		// === Low-Level: Provide Endpoint String ===
 
-		// Provide Logger endpoint (launcher starts logger-plugin)
 		fx.Provide(fx.Annotate(
 			func(launcher *connectplugin.PluginLauncher) (string, error) {
-				log.Println("fx providing Logger service...")
-				endpoint, err := launcher.GetService("logger-plugin", "logger")
+				log.Println("fx providing KV service (low-level endpoint)...")
+				endpoint, err := launcher.GetService("kv-server", "kv")
 				if err != nil {
-					return "", fmt.Errorf("failed to get logger: %w", err)
+					return "", fmt.Errorf("failed to get kv: %w", err)
 				}
-				log.Printf("✓ Logger endpoint: %s", endpoint)
+				log.Printf("✓ KV endpoint: %s", endpoint)
 				return endpoint, nil
 			},
-			fx.ResultTags(`name:"loggerEndpoint"`),
+			fx.ResultTags(`name:"kvEndpoint"`),
 		)),
 
-		// Provide Cache endpoint (launcher starts cache-plugin)
+		// === High-Level: Provide Typed Client ===
+
 		fx.Provide(fx.Annotate(
-			func(launcher *connectplugin.PluginLauncher) (string, error) {
-				log.Println("fx providing Cache service...")
-				endpoint, err := launcher.GetService("cache-plugin", "cache")
-				if err != nil {
-					return "", fmt.Errorf("failed to get cache: %w", err)
-				}
-				log.Printf("✓ Cache endpoint: %s", endpoint)
-				return endpoint, nil
+			func(endpoint string) kvv1connect.KVServiceClient {
+				log.Println("fx providing typed KV client...")
+				// Create real generated Connect client from endpoint
+				httpClient := &http.Client{}
+				kvClient := kvv1connect.NewKVServiceClient(httpClient, endpoint)
+				log.Printf("✓ Typed kvv1connect.KVServiceClient created")
+				return kvClient
 			},
-			fx.ResultTags(`name:"cacheEndpoint"`),
+			fx.ParamTags(`name:"kvEndpoint"`),
 		)),
 
 		// === Application Code ===
-		// In real app, you'd provide typed interfaces here:
-		//
-		// fx.Provide(func(endpoint loggerEndpoint) (Logger, error) {
-		//     return loggerv1connect.NewLoggerClient(httpClient, endpoint), nil
-		// })
-		//
-		// Then app code just uses:
-		// fx.Invoke(func(logger Logger, cache Cache) {
-		//     logger.Log("message")  // Doesn't know it's a plugin!
-		// })
+		// Application receives typed client and uses it - doesn't know it's a plugin!
 
 		fx.Invoke(fx.Annotate(
-			func(shutdowner fx.Shutdowner, loggerEndpoint, cacheEndpoint string) error {
-				// Give plugins time to register and report health
-				time.Sleep(1 * time.Second)
+			func(lc fx.Lifecycle, shutdowner fx.Shutdowner,
+				kvEndpoint string,
+				kvClient kvv1connect.KVServiceClient) {
 
-				log.Println()
-				log.Println("=== Plugin Status ===")
-				log.Println("✓ Logger plugin running (process strategy)")
-				log.Println("✓ Cache plugin running (process strategy)")
-				log.Println("✓ Both self-registered with Service Registry")
-				log.Println("✓ Cache discovered logger via Service Registry")
-				log.Println()
-				log.Println("=== Application receives typed services ===")
-				log.Printf("  loggerEndpoint: %s", loggerEndpoint)
-				log.Printf("  cacheEndpoint: %s", cacheEndpoint)
-				log.Println()
-				log.Println("In production, wrap as typed interfaces:")
-				log.Println("  fx.Provide(func(endpoint loggerEndpoint) (Logger, error) {")
-				log.Println("    return loggerv1connect.NewLoggerClient(http, endpoint), nil")
-				log.Println("  })")
-				log.Println()
-				log.Println("Then application code is plugin-agnostic:")
-				log.Println("  fx.Invoke(func(logger Logger, cache Cache) {")
-				log.Println("    logger.Log(\"msg\")  // Doesn't know it's a plugin!")
-				log.Println("    cache.Set(\"k\", \"v\")")
-				log.Println("  })")
-				log.Println()
-				log.Println("=== fx-managed demonstration complete! ===")
-				log.Println("  - fx orchestrated plugin startup (unmanaged deployment)")
-				log.Println("  - PluginLauncher started child processes")
-				log.Println("  - Plugins self-registered with host")
-				log.Println("  - ProcessStrategy used")
-				log.Println("  - Service Registry handled dependencies")
-				log.Println("  - Application receives plugin services via fx DI")
-				log.Println()
+			lc.Append(fx.Hook{
+				OnStart: func(ctx context.Context) error {
+					// Give plugin time to register
+					time.Sleep(1 * time.Second)
 
-				return shutdowner.Shutdown()
+					log.Println()
+					log.Println("=== Application received from fx DI ===")
+					log.Println()
+					log.Println("Low-level (endpoint string):")
+					log.Printf("  kvEndpoint: %s", kvEndpoint)
+					log.Println()
+					log.Println("High-level (typed client):")
+					log.Printf("  kvClient: %T", kvClient)
+					log.Println()
+
+					log.Println("=== Using typed client ===")
+
+					// Application code just uses kvClient - doesn't know it's a plugin!
+					_, err := kvClient.Put(ctx, connect.NewRequest(&kvv1.PutRequest{
+						Key:   "greeting",
+						Value: []byte("Hello from fx!"),
+					}))
+					if err != nil {
+						return fmt.Errorf("Put failed: %w", err)
+					}
+					log.Println("✓ kvClient.Put(\"greeting\", \"Hello from fx!\")")
+
+					getResp, err := kvClient.Get(ctx, connect.NewRequest(&kvv1.GetRequest{
+						Key: "greeting",
+					}))
+					if err != nil {
+						return fmt.Errorf("Get failed: %w", err)
+					}
+					log.Printf("✓ kvClient.Get(\"greeting\") → %s", getResp.Msg.Value)
+
+					log.Println()
+					log.Println("=== fx-managed demonstration complete! ===")
+					log.Println("  - fx orchestrated plugin startup (unmanaged)")
+					log.Println("  - PluginLauncher started kv-server process")
+					log.Println("  - Plugin self-registered with Service Registry")
+					log.Println("  - fx provides endpoint string (low-level)")
+					log.Println("  - fx provides kvv1connect.KVServiceClient (high-level)")
+					log.Println("  - Application uses REAL typed client from codegen")
+					log.Println("  - Application doesn't know KV is a plugin!")
+					log.Println()
+
+					return shutdowner.Shutdown()
+				},
+			})
 			},
-			fx.ParamTags(``, `name:"loggerEndpoint"`, `name:"cacheEndpoint"`),
+			fx.ParamTags(``, ``, `name:"kvEndpoint"`, ``),
 		)),
 	)
 
