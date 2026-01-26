@@ -1,11 +1,10 @@
 // Package main demonstrates fx integration with PluginLauncher.
 // Shows unmanaged deployment where fx is the orchestrator.
-// Demonstrates MIXING strategies: in-memory logger + process-based cache.
+// Demonstrates MIXING strategies: in-memory logger + process-based KV.
 package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -13,6 +12,8 @@ import (
 	"connectrpc.com/connect"
 	connectplugin "github.com/masegraye/connect-plugin-go"
 	loggercap "github.com/masegraye/connect-plugin-go/examples/capabilities/logger"
+	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
+	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
 	loggerv1 "github.com/masegraye/connect-plugin-go/gen/capability/logger/v1"
 	"github.com/masegraye/connect-plugin-go/gen/capability/logger/v1/loggerv1connect"
 	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
@@ -20,7 +21,7 @@ import (
 )
 
 func main() {
-	log.Println("=== fx-managed: Mixing In-Memory and Process Strategies ===")
+	log.Println("=== fx-managed: In-Memory Logger + Process KV ===")
 	log.Println()
 
 	app := fx.New(
@@ -59,7 +60,6 @@ func main() {
 		fx.Provide(func(platform *connectplugin.Platform, registry *connectplugin.ServiceRegistry, lc fx.Lifecycle) *connectplugin.PluginLauncher {
 			launcher := connectplugin.NewPluginLauncher(platform, registry)
 
-			// Register BOTH strategies
 			launcher.RegisterStrategy(connectplugin.NewProcessStrategy())
 			launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy())
 
@@ -68,18 +68,18 @@ func main() {
 				"logger-inmemory": {
 					Name:        "logger-inmemory",
 					Provides:    []string{"logger"},
-					Strategy:    "in-memory",  // ← In-memory goroutine
+					Strategy:    "in-memory",  // ← In-memory
 					Plugin:      &LoggerPlugin{},
 					ImplFactory: func() any { return loggercap.NewLoggerCapability() },
 					HostURL:     "http://localhost:9080",
 					Port:        9081,
 				},
-				// Process-based cache (depends on logger)
-				"cache-plugin": {
-					Name:       "cache-plugin",
-					Provides:   []string{"cache"},
-					Strategy:   "process",  // ← Child process
-					BinaryPath: "./dist/cache-plugin",
+				// Process-based KV
+				"kv-server": {
+					Name:       "kv-server",
+					Provides:   []string{"kv"},
+					Strategy:   "process",  // ← Process
+					BinaryPath: "./dist/kv-server",
 					HostURL:    "http://localhost:9080",
 					Port:       9082,
 				},
@@ -96,16 +96,16 @@ func main() {
 			return launcher
 		}),
 
-		// === Provide Logger (In-Memory) ===
+		// === Provide Typed Clients ===
 
 		fx.Provide(fx.Annotate(
 			func(launcher *connectplugin.PluginLauncher) (string, error) {
-				log.Println("fx providing Logger service (in-memory)...")
+				log.Println("fx providing Logger (in-memory)...")
 				endpoint, err := launcher.GetService("logger-inmemory", "logger")
 				if err != nil {
-					return "", fmt.Errorf("failed to get logger: %w", err)
+					return "", err
 				}
-				log.Printf("✓ Logger endpoint: %s (in-memory goroutine)", endpoint)
+				log.Printf("✓ Logger: %s (goroutine)", endpoint)
 				return endpoint, nil
 			},
 			fx.ResultTags(`name:"loggerEndpoint"`),
@@ -113,95 +113,95 @@ func main() {
 
 		fx.Provide(fx.Annotate(
 			func(endpoint string) loggerv1connect.LoggerClient {
-				log.Println("fx providing typed Logger client...")
-				httpClient := &http.Client{}
-				loggerClient := loggerv1connect.NewLoggerClient(httpClient, endpoint)
-				log.Println("✓ Typed loggerv1connect.LoggerClient created")
-				return loggerClient
+				return loggerv1connect.NewLoggerClient(&http.Client{}, endpoint)
 			},
 			fx.ParamTags(`name:"loggerEndpoint"`),
 		)),
 
-		// === Provide Cache (Process, depends on Logger) ===
-
 		fx.Provide(fx.Annotate(
 			func(launcher *connectplugin.PluginLauncher) (string, error) {
-				log.Println("fx providing Cache service (process)...")
-				endpoint, err := launcher.GetService("cache-plugin", "cache")
+				log.Println("fx providing KV (process)...")
+				endpoint, err := launcher.GetService("kv-server", "kv")
 				if err != nil {
-					return "", fmt.Errorf("failed to get cache: %w", err)
+					return "", err
 				}
-				log.Printf("✓ Cache endpoint: %s (child process)", endpoint)
+				log.Printf("✓ KV: %s (child process)", endpoint)
 				return endpoint, nil
 			},
-			fx.ResultTags(`name:"cacheEndpoint"`),
+			fx.ResultTags(`name:"kvEndpoint"`),
+		)),
+
+		fx.Provide(fx.Annotate(
+			func(endpoint string) kvv1connect.KVServiceClient {
+				return kvv1connect.NewKVServiceClient(&http.Client{}, endpoint)
+			},
+			fx.ParamTags(`name:"kvEndpoint"`),
 		)),
 
 		// === Application Code ===
 
-		fx.Invoke(fx.Annotate(
-			func(lc fx.Lifecycle, shutdowner fx.Shutdowner,
-				loggerEndpoint, cacheEndpoint string,
-				loggerClient loggerv1connect.LoggerClient) {
+		fx.Invoke(func(lc fx.Lifecycle, shutdowner fx.Shutdowner,
+			logger loggerv1connect.LoggerClient,
+			kv kvv1connect.KVServiceClient) {
 
 			lc.Append(fx.Hook{
 				OnStart: func(ctx context.Context) error {
-					// Give plugins time to register and discover
-					time.Sleep(1 * time.Second)
+					time.Sleep(500 * time.Millisecond)
 
 					log.Println()
-					log.Println("=== Application received from fx DI ===")
-					log.Println()
-					log.Println("Logger (in-memory strategy):")
-					log.Printf("  loggerEndpoint: %s", loggerEndpoint)
-					log.Printf("  loggerClient: %T", loggerClient)
-					log.Println()
-					log.Println("Cache (process strategy, requires logger):")
-					log.Printf("  cacheEndpoint: %s", cacheEndpoint)
+					log.Println("=== Application Using Typed Clients ===")
 					log.Println()
 
-					log.Println("=== Using typed Logger client ===")
-
-					// Application uses logger - doesn't know it's in-memory!
-					_, err := loggerClient.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
+					// Log start
+					logger.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
 						Level:   "INFO",
-						Message: "Application started via fx-managed",
+						Message: "Application started",
+					}))
+
+					// Store data
+					_, err := kv.Put(ctx, connect.NewRequest(&kvv1.PutRequest{
+						Key:   "user:123",
+						Value: []byte("Alice"),
 					}))
 					if err != nil {
-						return fmt.Errorf("Log failed: %w", err)
+						return err
 					}
-					log.Println("✓ loggerClient.Log(\"Application started\")")
+					log.Println("✓ kv.Put(\"user:123\", \"Alice\")")
 
-					_, err = loggerClient.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
-						Level:   "INFO",
-						Message: "Cache plugin depends on in-memory logger",
-						Fields: map[string]string{
-							"cache_endpoint": cacheEndpoint,
-						},
+					logger.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
+						Level: "INFO",
+						Message: "Stored user data",
+						Fields: map[string]string{"key": "user:123"},
+					}))
+
+					// Retrieve data
+					resp, err := kv.Get(ctx, connect.NewRequest(&kvv1.GetRequest{
+						Key: "user:123",
 					}))
 					if err != nil {
-						return fmt.Errorf("Log failed: %w", err)
+						return err
 					}
-					log.Println("✓ loggerClient.Log with structured fields")
+					log.Printf("✓ kv.Get(\"user:123\") → %s", resp.Msg.Value)
+
+					logger.Log(ctx, connect.NewRequest(&loggerv1.LogRequest{
+						Level: "INFO",
+						Message: "Retrieved user data",
+						Fields: map[string]string{"value": string(resp.Msg.Value)},
+					}))
 
 					log.Println()
 					log.Println("=== fx-managed demonstration complete! ===")
-					log.Println("  - fx orchestrated plugin startup (unmanaged)")
-					log.Println("  - Logger: IN-MEMORY strategy (goroutine)")
-					log.Println("  - Cache: PROCESS strategy (child process)")
-					log.Println("  - Cache depends on Logger via Service Registry")
-					log.Println("  - Cache discovered in-memory logger successfully")
-					log.Println("  - fx provides typed loggerv1connect.LoggerClient")
-					log.Println("  - Application doesn't know logger is in-memory!")
-					log.Println("  - MIXED STRATEGIES in same application!")
+					log.Println("  - Logger: IN-MEMORY (goroutine)")
+					log.Println("  - KV: PROCESS (child process)")
+					log.Println("  - MIXED STRATEGIES working together!")
+					log.Println("  - Application uses generated typed clients")
+					log.Println("  - Real data flowing through system")
 					log.Println()
 
 					return shutdowner.Shutdown()
 				},
 			})
-			},
-			fx.ParamTags(``, ``, `name:"loggerEndpoint"`, `name:"cacheEndpoint"`, ``),
-		)),
+		}),
 	)
 
 	app.Run()
