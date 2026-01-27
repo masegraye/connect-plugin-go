@@ -15,10 +15,10 @@ import (
 type PluginLauncher struct {
 	platform   *Platform
 	registry   *ServiceRegistry
-	strategies map[string]LaunchStrategy
+	Strategies map[string]LaunchStrategy   // Exported for daemon access
 	Specs      map[string]PluginSpec       // Exported for daemon access
 	Instances  map[string]*LaunchedPlugin  // Exported for daemon access
-	mu         sync.Mutex
+	Mu         sync.Mutex                  // Exported for daemon access
 }
 
 // LaunchedPlugin tracks a launched plugin (used by PluginLauncher).
@@ -42,15 +42,15 @@ func NewPluginLauncher(platform *Platform, registry *ServiceRegistry) *PluginLau
 
 // RegisterStrategy registers a launch strategy.
 func (l *PluginLauncher) RegisterStrategy(strategy LaunchStrategy) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.strategies[strategy.Name()] = strategy
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	l.Strategies[strategy.Name()] = strategy
 }
 
 // Configure adds plugin specifications.
 func (l *PluginLauncher) Configure(specs map[string]PluginSpec) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 	for name, spec := range specs {
 		l.Specs[name] = spec
 	}
@@ -66,8 +66,8 @@ func (l *PluginLauncher) Configure(specs map[string]PluginSpec) {
 //   endpoint, _ := launcher.GetService("logger-plugin", "logger")
 //   loggerClient := loggerv1connect.NewLoggerClient(httpClient, endpoint)
 func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 
 	// 1. Validate plugin is configured
 	spec, ok := l.Specs[pluginName]
@@ -115,7 +115,7 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 // Caller must hold lock.
 func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) error {
 	// Get strategy
-	strategy, ok := l.strategies[spec.Strategy]
+	strategy, ok := l.Strategies[spec.Strategy]
 	if !ok {
 		return fmt.Errorf("strategy %q not registered (available: %v)",
 			spec.Strategy, l.availableStrategies())
@@ -146,9 +146,9 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 // GetDefaultService is a convenience for single-service plugins.
 // Returns error if plugin provides multiple services (caller must specify which).
 func (l *PluginLauncher) GetDefaultService(pluginName string) (string, error) {
-	l.mu.Lock()
+	l.Mu.Lock()
 	spec, ok := l.Specs[pluginName]
-	l.mu.Unlock()
+	l.Mu.Unlock()
 
 	if !ok {
 		return "", fmt.Errorf("plugin %q not configured", pluginName)
@@ -165,8 +165,8 @@ func (l *PluginLauncher) GetDefaultService(pluginName string) (string, error) {
 // Shutdown stops all launched plugins.
 // Should be called in fx OnStop hook.
 func (l *PluginLauncher) Shutdown() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
 
 	for name, instance := range l.Instances {
 		if instance.Cleanup != nil {
@@ -178,8 +178,8 @@ func (l *PluginLauncher) Shutdown() {
 
 // availableStrategies returns list of registered strategy names.
 func (l *PluginLauncher) availableStrategies() []string {
-	names := make([]string, 0, len(l.strategies))
-	for name := range l.strategies {
+	names := make([]string, 0, len(l.Strategies))
+	for name := range l.Strategies {
 		names = append(names, name)
 	}
 	return names
