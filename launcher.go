@@ -222,3 +222,11 @@ func (l *PluginLauncher) StoreInstance(name string, instance *LaunchedPlugin) {
 
 	l.instances[name] = instance
 }
+
+// RemoveInstance removes a plugin instance
+func (l *PluginLauncher) RemoveInstance(name string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	delete(l.instances, name)
+}
