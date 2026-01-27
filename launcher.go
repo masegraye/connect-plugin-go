@@ -15,10 +15,10 @@ import (
 type PluginLauncher struct {
 	platform   *Platform
 	registry   *ServiceRegistry
-	Strategies map[string]LaunchStrategy   // Exported for daemon access
-	Specs      map[string]PluginSpec       // Exported for daemon access
-	Instances  map[string]*LaunchedPlugin  // Exported for daemon access
-	Mu         sync.Mutex                  // Exported for daemon access
+	strategies map[string]LaunchStrategy
+	specs      map[string]PluginSpec
+	instances  map[string]*LaunchedPlugin
+	mu         sync.Mutex
 }
 
 // LaunchedPlugin tracks a launched plugin (used by PluginLauncher).
@@ -42,17 +42,17 @@ func NewPluginLauncher(platform *Platform, registry *ServiceRegistry) *PluginLau
 
 // RegisterStrategy registers a launch strategy.
 func (l *PluginLauncher) RegisterStrategy(strategy LaunchStrategy) {
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	l.Strategies[strategy.Name()] = strategy
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.strategies[strategy.Name()] = strategy
 }
 
 // Configure adds plugin specifications.
 func (l *PluginLauncher) Configure(specs map[string]PluginSpec) {
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	for name, spec := range specs {
-		l.Specs[name] = spec
+		l.specs[name] = spec
 	}
 }
 
@@ -66,11 +66,11 @@ func (l *PluginLauncher) Configure(specs map[string]PluginSpec) {
 //   endpoint, _ := launcher.GetService("logger-plugin", "logger")
 //   loggerClient := loggerv1connect.NewLoggerClient(httpClient, endpoint)
 func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, error) {
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	// 1. Validate plugin is configured
-	spec, ok := l.Specs[pluginName]
+	spec, ok := l.specs[pluginName]
 	if !ok {
 		return "", fmt.Errorf("plugin %q not configured in launcher", pluginName)
 	}
@@ -82,12 +82,12 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 	}
 
 	// 3. Launch plugin if not already running
-	instance, exists := l.Instances[pluginName]
+	instance, exists := l.instances[pluginName]
 	if !exists {
 		if err := l.launchPluginLocked(pluginName, spec); err != nil {
 			return "", fmt.Errorf("failed to launch plugin %q: %w", pluginName, err)
 		}
-		instance = l.Instances[pluginName]
+		instance = l.instances[pluginName]
 	}
 
 	// 4. Verify service is registered (optional check)
@@ -115,7 +115,7 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 // Caller must hold lock.
 func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) error {
 	// Get strategy
-	strategy, ok := l.Strategies[spec.Strategy]
+	strategy, ok := l.strategies[spec.Strategy]
 	if !ok {
 		return fmt.Errorf("strategy %q not registered (available: %v)",
 			spec.Strategy, l.availableStrategies())
@@ -133,7 +133,7 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 	time.Sleep(500 * time.Millisecond)
 
 	// Store instance
-	l.Instances[pluginName] = &LaunchedPlugin{
+	l.instances[pluginName] = &LaunchedPlugin{
 		PluginName: pluginName,
 		Endpoint:   endpoint,
 		Cleanup:    cleanup,
@@ -146,9 +146,9 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 // GetDefaultService is a convenience for single-service plugins.
 // Returns error if plugin provides multiple services (caller must specify which).
 func (l *PluginLauncher) GetDefaultService(pluginName string) (string, error) {
-	l.Mu.Lock()
-	spec, ok := l.Specs[pluginName]
-	l.Mu.Unlock()
+	l.mu.Lock()
+	spec, ok := l.specs[pluginName]
+	l.mu.Unlock()
 
 	if !ok {
 		return "", fmt.Errorf("plugin %q not configured", pluginName)
@@ -165,21 +165,21 @@ func (l *PluginLauncher) GetDefaultService(pluginName string) (string, error) {
 // Shutdown stops all launched plugins.
 // Should be called in fx OnStop hook.
 func (l *PluginLauncher) Shutdown() {
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	for name, instance := range l.Instances {
+	for name, instance := range l.instances {
 		if instance.Cleanup != nil {
 			instance.Cleanup()
 		}
-		delete(l.Instances, name)
+		delete(l.instances, name)
 	}
 }
 
 // availableStrategies returns list of registered strategy names.
 func (l *PluginLauncher) availableStrategies() []string {
-	names := make([]string, 0, len(l.Strategies))
-	for name := range l.Strategies {
+	names := make([]string, 0, len(l.strategies))
+	for name := range l.strategies {
 		names = append(names, name)
 	}
 	return names
@@ -193,4 +193,32 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// Accessor methods for safe external access (thread-safe)
+
+// GetInstance returns a plugin instance if it exists
+func (l *PluginLauncher) GetInstance(name string) (*LaunchedPlugin, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	instance, ok := l.instances[name]
+	return instance, ok
+}
+
+// GetStrategy returns a strategy by name
+func (l *PluginLauncher) GetStrategy(name string) (LaunchStrategy, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	strategy, ok := l.strategies[name]
+	return strategy, ok
+}
+
+// StoreInstance stores a plugin instance (for daemon use during discovery)
+func (l *PluginLauncher) StoreInstance(name string, instance *LaunchedPlugin) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.instances[name] = instance
 }
