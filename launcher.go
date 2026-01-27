@@ -34,9 +34,9 @@ func NewPluginLauncher(platform *Platform, registry *ServiceRegistry) *PluginLau
 	return &PluginLauncher{
 		platform:   platform,
 		registry:   registry,
-		Strategies: make(map[string]LaunchStrategy),
-		Specs:      make(map[string]PluginSpec),
-		Instances:  make(map[string]*LaunchedPlugin),
+		strategies: make(map[string]LaunchStrategy),
+		specs:      make(map[string]PluginSpec),
+		instances:  make(map[string]*LaunchedPlugin),
 	}
 }
 
