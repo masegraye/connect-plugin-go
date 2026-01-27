@@ -69,11 +69,13 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 
 	// 3. Return endpoint and cleanup function
 	cleanup := func() {
+		fmt.Printf("===== [ProcessStrategy] cleanup called for %s =====\n", spec.Name)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
 		// Graceful shutdown attempt with proper wait time
 		if cmd.Process != nil {
+			fmt.Printf("===== [ProcessStrategy] Sending SIGINT to %s (PID %d) =====\n", spec.Name, cmd.Process.Pid)
 			// Send SIGINT for graceful shutdown
 			cmd.Process.Signal(os.Interrupt)
 
@@ -86,15 +88,18 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 
 			select {
 			case <-done:
-				// Process exited gracefully
+				fmt.Printf("===== [ProcessStrategy] %s exited gracefully =====\n", spec.Name)
 			case <-time.After(10 * time.Second):
+				fmt.Printf("===== [ProcessStrategy] %s timed out, sending SIGKILL =====\n", spec.Name)
 				// Force kill after timeout
 				cmd.Process.Kill()
 				<-done // Wait for process to actually exit
+				fmt.Printf("===== [ProcessStrategy] %s killed =====\n", spec.Name)
 			}
 		}
 
 		delete(s.processes, spec.Name)
+		fmt.Printf("===== [ProcessStrategy] cleanup complete for %s =====\n", spec.Name)
 	}
 
 	return endpoint, cleanup, nil

@@ -3,6 +3,7 @@ package connectplugin
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -165,15 +166,38 @@ func (l *PluginLauncher) GetDefaultService(pluginName string) (string, error) {
 // Shutdown stops all launched plugins.
 // Should be called in fx OnStop hook.
 func (l *PluginLauncher) Shutdown() {
+	fmt.Println("===== PluginLauncher.Shutdown() called =====")
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	fmt.Printf("===== Shutting down %d plugin instances =====\n", len(l.instances))
 	for name, instance := range l.instances {
+		fmt.Printf("===== Shutting down plugin: %s (endpoint: %s) =====\n", name, instance.Endpoint)
+		// Try calling Shutdown RPC before sending signals
+		if instance.Endpoint != "" {
+			fmt.Printf("===== Calling Shutdown RPC for %s =====\n", name)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			controlClient := NewPluginControlClient(instance.Endpoint, http.DefaultClient)
+			acknowledged, err := controlClient.Shutdown(shutdownCtx, 10, "daemon shutdown")
+			cancel()
+			if err != nil {
+				fmt.Printf("===== Shutdown RPC for %s failed: %v =====\n", name, err)
+			} else if acknowledged {
+				fmt.Printf("===== Shutdown RPC for %s acknowledged, waiting 500ms =====\n", name)
+				// Wait a bit for plugin to clean up
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+
+		// Then call cleanup (SIGINT/SIGKILL as fallback)
 		if instance.Cleanup != nil {
+			fmt.Printf("===== Calling cleanup function for %s =====\n", name)
 			instance.Cleanup()
+			fmt.Printf("===== Cleanup for %s complete =====\n", name)
 		}
 		delete(l.instances, name)
 	}
+	fmt.Println("===== PluginLauncher.Shutdown() complete =====")
 }
 
 // availableStrategies returns list of registered strategy names.
