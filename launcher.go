@@ -16,17 +16,17 @@ type PluginLauncher struct {
 	platform   *Platform
 	registry   *ServiceRegistry
 	strategies map[string]LaunchStrategy
-	Specs      map[string]PluginSpec      // Exported for daemon access
-	Instances  map[string]*pluginInstance // Exported for daemon access
+	Specs      map[string]PluginSpec       // Exported for daemon access
+	Instances  map[string]*LaunchedPlugin  // Exported for daemon access
 	mu         sync.Mutex
 }
 
-// pluginInstance tracks a launched plugin.
-type pluginInstance struct {
-	pluginName string
-	endpoint   string
-	cleanup    func()
-	provides   []string
+// LaunchedPlugin tracks a launched plugin (used by PluginLauncher).
+type LaunchedPlugin struct {
+	PluginName string
+	Endpoint   string
+	Cleanup    func()
+	Provides   []string
 }
 
 // NewPluginLauncher creates a plugin launcher.
@@ -36,7 +36,7 @@ func NewPluginLauncher(platform *Platform, registry *ServiceRegistry) *PluginLau
 		registry:   registry,
 		strategies: make(map[string]LaunchStrategy),
 		Specs:      make(map[string]PluginSpec),
-		Instances:  make(map[string]*pluginInstance),
+		Instances:  make(map[string]*LaunchedPlugin),
 	}
 }
 
@@ -108,7 +108,7 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 	// 5. Return plugin's base endpoint URL
 	// Caller creates typed client that talks directly to plugin
 	// For host→plugin calls, use direct endpoint (not routed)
-	return instance.endpoint, nil
+	return instance.Endpoint, nil
 }
 
 // launchPluginLocked launches a plugin using its configured strategy.
@@ -133,11 +133,11 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 	time.Sleep(500 * time.Millisecond)
 
 	// Store instance
-	l.Instances[pluginName] = &pluginInstance{
-		pluginName: pluginName,
-		endpoint:   endpoint,
-		cleanup:    cleanup,
-		provides:   spec.Provides,
+	l.Instances[pluginName] = &LaunchedPlugin{
+		PluginName: pluginName,
+		Endpoint:   endpoint,
+		Cleanup:    cleanup,
+		Provides:   spec.Provides,
 	}
 
 	return nil
@@ -169,8 +169,8 @@ func (l *PluginLauncher) Shutdown() {
 	defer l.mu.Unlock()
 
 	for name, instance := range l.Instances {
-		if instance.cleanup != nil {
-			instance.cleanup()
+		if instance.Cleanup != nil {
+			instance.Cleanup()
 		}
 		delete(l.Instances, name)
 	}
