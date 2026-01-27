@@ -59,8 +59,9 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 	s.mu.Unlock()
 
 	// 2. Wait for plugin to be ready (listening on port)
+	// 30s timeout to handle slow containerd startup after unclean shutdown
 	endpoint := fmt.Sprintf("http://localhost:%d", spec.Port)
-	if err := waitForPluginReady(endpoint, 5*time.Second); err != nil {
+	if err := waitForPluginReady(endpoint, 30*time.Second); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
 		return "", nil, fmt.Errorf("plugin %s didn't become ready: %w", spec.Name, err)
@@ -71,12 +72,26 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		// Graceful shutdown attempt
+		// Graceful shutdown attempt with proper wait time
 		if cmd.Process != nil {
+			// Send SIGINT for graceful shutdown
 			cmd.Process.Signal(os.Interrupt)
-			time.Sleep(100 * time.Millisecond)
-			cmd.Process.Kill()
-			cmd.Wait()
+
+			// Wait up to 10 seconds for graceful exit
+			done := make(chan struct{})
+			go func() {
+				cmd.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				// Process exited gracefully
+			case <-time.After(10 * time.Second):
+				// Force kill after timeout
+				cmd.Process.Kill()
+				<-done // Wait for process to actually exit
+			}
 		}
 
 		delete(s.processes, spec.Name)
