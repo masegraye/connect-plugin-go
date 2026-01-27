@@ -16,8 +16,8 @@ type PluginLauncher struct {
 	platform   *Platform
 	registry   *ServiceRegistry
 	strategies map[string]LaunchStrategy
-	specs      map[string]PluginSpec
-	instances  map[string]*pluginInstance
+	Specs      map[string]PluginSpec      // Exported for daemon access
+	Instances  map[string]*pluginInstance // Exported for daemon access
 	mu         sync.Mutex
 }
 
@@ -35,8 +35,8 @@ func NewPluginLauncher(platform *Platform, registry *ServiceRegistry) *PluginLau
 		platform:   platform,
 		registry:   registry,
 		strategies: make(map[string]LaunchStrategy),
-		specs:      make(map[string]PluginSpec),
-		instances:  make(map[string]*pluginInstance),
+		Specs:      make(map[string]PluginSpec),
+		Instances:  make(map[string]*pluginInstance),
 	}
 }
 
@@ -52,7 +52,7 @@ func (l *PluginLauncher) Configure(specs map[string]PluginSpec) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for name, spec := range specs {
-		l.specs[name] = spec
+		l.Specs[name] = spec
 	}
 }
 
@@ -70,7 +70,7 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 	defer l.mu.Unlock()
 
 	// 1. Validate plugin is configured
-	spec, ok := l.specs[pluginName]
+	spec, ok := l.Specs[pluginName]
 	if !ok {
 		return "", fmt.Errorf("plugin %q not configured in launcher", pluginName)
 	}
@@ -82,12 +82,12 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 	}
 
 	// 3. Launch plugin if not already running
-	instance, exists := l.instances[pluginName]
+	instance, exists := l.Instances[pluginName]
 	if !exists {
 		if err := l.launchPluginLocked(pluginName, spec); err != nil {
 			return "", fmt.Errorf("failed to launch plugin %q: %w", pluginName, err)
 		}
-		instance = l.instances[pluginName]
+		instance = l.Instances[pluginName]
 	}
 
 	// 4. Verify service is registered (optional check)
@@ -133,7 +133,7 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 	time.Sleep(500 * time.Millisecond)
 
 	// Store instance
-	l.instances[pluginName] = &pluginInstance{
+	l.Instances[pluginName] = &pluginInstance{
 		pluginName: pluginName,
 		endpoint:   endpoint,
 		cleanup:    cleanup,
@@ -147,7 +147,7 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 // Returns error if plugin provides multiple services (caller must specify which).
 func (l *PluginLauncher) GetDefaultService(pluginName string) (string, error) {
 	l.mu.Lock()
-	spec, ok := l.specs[pluginName]
+	spec, ok := l.Specs[pluginName]
 	l.mu.Unlock()
 
 	if !ok {
@@ -168,11 +168,11 @@ func (l *PluginLauncher) Shutdown() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	for name, instance := range l.instances {
+	for name, instance := range l.Instances {
 		if instance.cleanup != nil {
 			instance.cleanup()
 		}
-		delete(l.instances, name)
+		delete(l.Instances, name)
 	}
 }
 
