@@ -140,6 +140,216 @@ When `RateLimiter` is set in `ServeConfig`, rate limits are applied to:
 - Must explicitly set `RateLimiter` in ServeConfig
 - Recommended: Start with moderate settings and tune based on metrics
 
+## Distributed Deployments
+
+### Multi-Replica Limitation
+
+⚠️ **Important:** The token bucket rate limiter maintains state **in-memory within each process**. In distributed deployments with multiple host replicas, rate limits are enforced **per replica**, not globally.
+
+**Example Scenario:**
+
+```
+Configuration:
+- Rate limit: 100 req/s, burst 10
+- Host replicas: 3
+
+Effective behavior:
+- Replica 1: Allows up to 100 req/s for runtime-123
+- Replica 2: Allows up to 100 req/s for runtime-123
+- Replica 3: Allows up to 100 req/s for runtime-123
+- Total: ~300 req/s (3× intended limit)
+```
+
+**Why this happens:**
+- Each replica has independent `TokenBucketLimiter` instance
+- No shared state between replicas
+- Load balancer distributes requests across replicas
+- Plugin can send requests to multiple replicas simultaneously
+
+### Mitigation Strategies
+
+#### Option 1: Adjust for Replica Count (Recommended)
+
+Divide your target rate by the number of replicas:
+
+```go
+// Target: 300 req/s total across all replicas
+targetRate := 300.0
+replicaCount := 3
+perReplicaRate := targetRate / float64(replicaCount)  // 100 req/s
+
+limiter := connectplugin.NewTokenBucketLimiter()
+
+rate := connectplugin.Rate{
+    RequestsPerSecond: perReplicaRate,  // 100 req/s per replica
+    Burst:             int(perReplicaRate) / 5,  // 20 burst
+}
+
+connectplugin.Serve(&connectplugin.ServeConfig{
+    RateLimiter: limiter,
+    // Apply rate to specific endpoints
+})
+```
+
+**Helper function:**
+
+```go
+// AdjustForReplicas calculates per-replica rate for distributed deployment
+func AdjustForReplicas(targetRate float64, replicaCount int) float64 {
+    if replicaCount <= 0 {
+        replicaCount = 1
+    }
+    return targetRate / float64(replicaCount)
+}
+
+// Usage:
+perReplicaRate := AdjustForReplicas(300.0, 3)  // 100 req/s
+```
+
+**Kubernetes example:**
+
+```yaml
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plugin-host
+spec:
+  replicas: 3  # ← Replica count
+  template:
+    spec:
+      containers:
+      - name: host
+        env:
+        - name: REPLICA_COUNT
+          value: "3"
+        - name: TARGET_RATE
+          value: "300"  # Total desired rate
+```
+
+```go
+// Use env vars in configuration
+replicaCount, _ := strconv.Atoi(os.Getenv("REPLICA_COUNT"))
+targetRate, _ := strconv.ParseFloat(os.Getenv("TARGET_RATE"), 64)
+perReplicaRate := targetRate / float64(replicaCount)
+```
+
+#### Option 2: External API Gateway
+
+Use an API gateway with distributed rate limiting:
+
+**Kong (Redis-backed):**
+
+```yaml
+# kong.yml
+plugins:
+  - name: rate-limiting
+    config:
+      minute: 300
+      policy: redis
+      redis_host: redis.svc.cluster.local
+      redis_port: 6379
+```
+
+**Envoy (Global rate limit service):**
+
+```yaml
+# envoy.yaml
+rate_limits:
+  - actions:
+    - generic_key:
+        descriptor_value: plugin_requests
+    descriptors:
+      - key: runtime_id
+        rate_limit:
+          requests_per_unit: 300
+          unit: minute
+```
+
+**nginx:**
+
+```nginx
+# nginx.conf
+http {
+    limit_req_zone $http_x_plugin_runtime_id zone=plugin_limit:10m rate=5r/s;
+
+    server {
+        location / {
+            limit_req zone=plugin_limit burst=10;
+            proxy_pass http://plugin-host:8080;
+        }
+    }
+}
+```
+
+**Pros:**
+- True distributed rate limiting
+- Shared state across all replicas
+- Production-grade implementations
+- Additional features (metrics, dashboards)
+
+**Cons:**
+- External dependency (Redis, rate limit service)
+- Additional operational complexity
+- Network hop adds latency
+
+#### Option 3: Sticky Sessions
+
+Route requests from same plugin to same replica:
+
+```yaml
+# kubernetes service
+apiVersion: v1
+kind: Service
+metadata:
+  name: plugin-host
+spec:
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+```
+
+**Pros:**
+- Simple configuration
+- No code changes
+- Each plugin gets consistent rate limit
+
+**Cons:**
+- Uneven load distribution
+- Plugin can still bypass by changing source IP
+- Not effective if plugins use multiple IPs
+
+### Choosing the Right Approach
+
+| Scenario | Recommended Approach |
+|----------|---------------------|
+| **Single replica** | No adjustment needed |
+| **2-5 replicas, predictable traffic** | Adjust for replica count (Option 1) |
+| **5+ replicas, strict limits required** | External API gateway (Option 2) |
+| **Auto-scaling replicas** | External API gateway (Option 2) |
+| **Development/staging** | No adjustment (over-provisioned is fine) |
+
+### Future Enhancement: Distributed Rate Limiter
+
+Phase 3 will include pluggable rate limiter interface for distributed backends:
+
+```go
+// Planned interface
+type RateLimiter interface {
+    Allow(key string, limit Rate) bool
+    Close()
+}
+
+// Implementations:
+// - TokenBucketLimiter (in-memory, current)
+// - RedisRateLimiter (distributed, shared state via Redis)
+// - NoOpRateLimiter (testing/development, always allows)
+```
+
+**Timeline:** Phase 3 (Q2 2026)
+**Tracking:** See Phase 3 roadmap
+
 ## Advanced Usage
 
 ### Per-Endpoint Rate Limits

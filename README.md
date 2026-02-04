@@ -5,6 +5,26 @@
 
 A modern, remote-first plugin system for Go using [Connect RPC](https://connectrpc.com).
 
+## ⚠️ Security Notice
+
+**TLS is REQUIRED for production deployments.**
+
+connect-plugin-go transmits authentication tokens and plugin data over HTTP. Without TLS, credentials are sent in plaintext and vulnerable to interception.
+
+```go
+// ⚠️ INSECURE - Development only
+client := connectplugin.NewClient(connectplugin.ClientConfig{
+    Endpoint: "http://localhost:8080",  // Plaintext HTTP
+})
+
+// ✅ SECURE - Production ready
+client := connectplugin.NewClient(connectplugin.ClientConfig{
+    Endpoint: "https://plugin-host.example.com",  // TLS encryption
+})
+```
+
+See the [Security Guide](docs/security.md) for complete production deployment guidance.
+
 ## Features
 
 - 🌐 **Remote-first**: Plugins run as separate processes, communicate over HTTP/2

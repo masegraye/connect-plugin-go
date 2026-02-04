@@ -64,6 +64,7 @@ nav:
     - Discovery: guides/discovery.md
     - Rate Limiting: guides/rate-limiting.md
     - Security Best Practices: guides/security-best-practices.md
+    - Performance: guides/performance.md
   - Security:
     - Security Overview: security.md
     - Best Practices: guides/security-best-practices.md
