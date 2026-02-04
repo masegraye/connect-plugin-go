@@ -123,8 +123,14 @@ func (p *Platform) AddPlugin(ctx context.Context, config PluginConfig) error {
 	}
 
 	// 3. Generate runtime identity
-	runtimeID := generateRuntimeID(selfID)
-	runtimeToken := generateToken()
+	runtimeID, err := generateRuntimeID(selfID)
+	if err != nil {
+		return fmt.Errorf("failed to generate runtime ID: %w", err)
+	}
+	runtimeToken, err := generateToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate runtime token: %w", err)
+	}
 
 	// 4. Call plugin's SetRuntimeIdentity() to assign identity
 	if err := infoClient.SetRuntimeIdentity(ctx, runtimeID, runtimeToken, ""); err != nil {
@@ -233,8 +239,14 @@ func (p *Platform) ReplacePlugin(ctx context.Context, runtimeID string, newConfi
 	}
 
 	// 1. Start new version in parallel
-	newRuntimeID := generateRuntimeID(newConfig.SelfID)
-	newToken := generateToken()
+	newRuntimeID, err := generateRuntimeID(newConfig.SelfID)
+	if err != nil {
+		return fmt.Errorf("failed to generate runtime ID: %w", err)
+	}
+	newToken, err := generateToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate token: %w", err)
+	}
 
 	newInstance := &PluginInstance{
 		RuntimeID: newRuntimeID,

@@ -4,19 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
 	connectplugin "github.com/masegraye/connect-plugin-go"
-	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
-	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
 	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
-	kvv1plugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
+	kvplugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
 )
 
 func main() {
@@ -28,13 +24,45 @@ func main() {
 
 	// Deployment model detection:
 	// - If HOST_URL set → Unmanaged (self-register with host)
-	// - If HOST_URL empty → Managed (wait for host to call us)
+	// - If HOST_URL empty → Standalone (serve with handshake, clients connect directly)
 	isUnmanaged := hostURL != ""
-	if !isUnmanaged {
-		hostURL = "http://localhost:8080" // Default
-	}
 
-	// Create client for Service Registry integration
+	// Create KV store implementation
+	store := kvimpl.NewStore()
+
+	if isUnmanaged {
+		// Unmanaged mode: Register with host platform
+		log.Printf("Starting KV server (Unmanaged) on :%s, registering with %s", port, hostURL)
+		runUnmanaged(store, port, hostURL)
+	} else {
+		// Standalone mode: Serve with full handshake infrastructure
+		log.Printf("Starting KV server (Standalone) on :%s", port)
+		runStandalone(store, port)
+	}
+}
+
+func runStandalone(store *kvimpl.Store, port string) {
+	// Use connectplugin.Serve() which provides full plugin infrastructure:
+	// - Handshake service for client connection
+	// - Health service for monitoring
+	// - Signal handling for graceful shutdown
+	err := connectplugin.Serve(&connectplugin.ServeConfig{
+		Addr: ":" + port,
+		Plugins: connectplugin.PluginSet{
+			"kv": &kvplugin.KVServicePlugin{},
+		},
+		Impls: map[string]any{
+			"kv": store,
+		},
+		HealthService: connectplugin.NewHealthServer(),
+	})
+	if err != nil {
+		log.Fatalf("Server error: %v", err)
+	}
+}
+
+func runUnmanaged(store *kvimpl.Store, port, hostURL string) {
+	// Create client for host registration
 	client, err := connectplugin.NewClient(connectplugin.ClientConfig{
 		HostURL:     hostURL,
 		SelfID:      "kv-server",
@@ -43,7 +71,7 @@ func main() {
 			Name:    "KV Server",
 			Version: "1.0.0",
 			Provides: []connectplugin.ServiceDeclaration{
-				{Type: "kv", Version: "1.0.0", Path: kvv1connect.KVServiceName},
+				{Type: "kv", Version: "1.0.0", Path: "/" + kvv1connect.KVServiceName + "/"},
 			},
 		},
 	})
@@ -52,53 +80,29 @@ func main() {
 	}
 
 	ctx := context.Background()
-
-	// Unmanaged: Connect to host immediately
-	if isUnmanaged {
-		if err := client.Connect(ctx); err != nil {
-			log.Fatalf("Failed to connect: %v", err)
-		}
-		log.Printf("KV server started (Unmanaged) with runtime_id: %s", client.RuntimeID())
-		registerService(ctx, client, port)
-	} else {
-		log.Printf("KV server started (Managed) - waiting for host")
+	if err := client.Connect(ctx); err != nil {
+		log.Fatalf("Failed to connect to host: %v", err)
 	}
+	log.Printf("KV server connected with runtime_id: %s", client.RuntimeID())
 
-	// Create KV implementation
-	store := kvimpl.NewStore()
-
-	// Create HTTP server
-	mux := http.NewServeMux()
-
-	// Add KV service
-	kvPath, kvHandler, _ := (&kvv1plugin.KVServicePlugin{}).ConnectServer(store)
-	mux.Handle(kvPath, kvHandler)
-
-	// Add PluginControl service
-	controlHandler := &pluginControlHandler{client: client}
-	controlPath, controlH := connectpluginv1connect.NewPluginControlHandler(controlHandler)
-	mux.Handle(controlPath, controlH)
-
-	// Add PluginIdentity service (for Managed)
-	identityHandler := &pluginIdentityHandler{client: client}
-	identityPath, identityH := connectpluginv1connect.NewPluginIdentityHandler(identityHandler)
-	mux.Handle(identityPath, identityH)
-
-	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
-	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	// Register service after server starts
 	go func() {
-		<-sigCh
-		log.Println("Shutting down KV server")
-		server.Shutdown(context.Background())
+		time.Sleep(200 * time.Millisecond) // Wait for server to be ready
+		registerService(ctx, client, port)
 	}()
 
-	log.Printf("KV server listening on :%s", port)
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+	// Serve with full handshake infrastructure
+	err = connectplugin.Serve(&connectplugin.ServeConfig{
+		Addr: ":" + port,
+		Plugins: connectplugin.PluginSet{
+			"kv": &kvplugin.KVServicePlugin{},
+		},
+		Impls: map[string]any{
+			"kv": store,
+		},
+		HealthService: connectplugin.NewHealthServer(),
+	})
+	if err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
@@ -106,6 +110,7 @@ func main() {
 func registerService(ctx context.Context, client *connectplugin.Client, port string) {
 	regClient := client.RegistryClient()
 	if regClient == nil {
+		log.Println("Warning: Registry client not available")
 		return
 	}
 
@@ -118,7 +123,7 @@ func registerService(ctx context.Context, client *connectplugin.Client, port str
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 		ServiceType:  "kv",
 		Version:      "1.0.0",
-		EndpointPath: kvv1connect.KVServiceName,
+		EndpointPath: "/" + kvv1connect.KVServiceName + "/",
 		Metadata: map[string]string{
 			"base_url": myBaseURL,
 		},
@@ -127,82 +132,11 @@ func registerService(ctx context.Context, client *connectplugin.Client, port str
 	regReq.Header().Set("Authorization", "Bearer "+client.RuntimeToken())
 
 	if _, err := regClient.RegisterService(ctx, regReq); err != nil {
-		log.Fatalf("Failed to register service: %v", err)
+		log.Printf("Failed to register service: %v", err)
+		return
 	}
 	log.Printf("Registered service: kv v1.0.0 at %s", myBaseURL)
 
 	// Report healthy
 	client.ReportHealth(ctx, connectpluginv1.HealthState_HEALTH_STATE_HEALTHY, "", nil)
-}
-
-type pluginControlHandler struct {
-	client *connectplugin.Client
-}
-
-func (h *pluginControlHandler) GetHealth(
-	ctx context.Context,
-	req *connect.Request[connectpluginv1.GetHealthRequest],
-) (*connect.Response[connectpluginv1.GetHealthResponse], error) {
-	return connect.NewResponse(&connectpluginv1.GetHealthResponse{
-		State:  connectpluginv1.HealthState_HEALTH_STATE_HEALTHY,
-		Reason: "operational",
-	}), nil
-}
-
-func (h *pluginControlHandler) Shutdown(
-	ctx context.Context,
-	req *connect.Request[connectpluginv1.ShutdownRequest],
-) (*connect.Response[connectpluginv1.ShutdownResponse], error) {
-	log.Printf("Shutdown requested (grace: %ds)", req.Msg.GracePeriodSeconds)
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		os.Exit(0)
-	}()
-	return connect.NewResponse(&connectpluginv1.ShutdownResponse{Acknowledged: true}), nil
-}
-
-type pluginIdentityHandler struct {
-	client *connectplugin.Client
-}
-
-func (h *pluginIdentityHandler) GetPluginInfo(
-	ctx context.Context,
-	req *connect.Request[connectpluginv1.GetPluginInfoRequest],
-) (*connect.Response[connectpluginv1.GetPluginInfoResponse], error) {
-	cfg := h.client.Config()
-
-	provides := make([]*connectpluginv1.ServiceDeclaration, len(cfg.Metadata.Provides))
-	for i, svc := range cfg.Metadata.Provides {
-		provides[i] = &connectpluginv1.ServiceDeclaration{
-			Type:    svc.Type,
-			Version: svc.Version,
-			Path:    svc.Path,
-		}
-	}
-
-	return connect.NewResponse(&connectpluginv1.GetPluginInfoResponse{
-		SelfId:      cfg.SelfID,
-		SelfVersion: cfg.SelfVersion,
-		Provides:    provides,
-		Metadata: map[string]string{
-			"name":    cfg.Metadata.Name,
-			"version": cfg.Metadata.Version,
-		},
-	}), nil
-}
-
-func (h *pluginIdentityHandler) SetRuntimeIdentity(
-	ctx context.Context,
-	req *connect.Request[connectpluginv1.SetRuntimeIdentityRequest],
-) (*connect.Response[connectpluginv1.SetRuntimeIdentityResponse], error) {
-	h.client.SetRuntimeIdentity(req.Msg.RuntimeId, req.Msg.RuntimeToken, req.Msg.HostUrl)
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		port := os.Getenv("PORT")
-		if port == "" {
-			port = "8080"
-		}
-		registerService(context.Background(), h.client, port)
-	}()
-	return connect.NewResponse(&connectpluginv1.SetRuntimeIdentityResponse{Acknowledged: true}), nil
 }

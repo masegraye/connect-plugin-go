@@ -7,10 +7,23 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
 )
+
+// registerTestToken is a helper to register a token with expiration for testing.
+func registerTestToken(h *HandshakeServer, runtimeID, token string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	h.tokens[runtimeID] = &tokenInfo{
+		token:     token,
+		issuedAt:  now,
+		expiresAt: now.Add(DefaultRuntimeTokenTTL),
+	}
+}
 
 func TestServiceRouter_ValidRequest(t *testing.T) {
 	// Set up dependencies
@@ -20,11 +33,9 @@ func TestServiceRouter_ValidRequest(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Generate runtime identity
-	runtimeID := generateRuntimeID("test-plugin")
-	token := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[runtimeID] = token
-	handshake.mu.Unlock()
+	runtimeID, _ := generateRuntimeID("test-plugin")
+	token, _ := generateToken()
+	registerTestToken(handshake, runtimeID, token)
 
 	// Register service provider
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
@@ -58,11 +69,9 @@ func TestServiceRouter_ValidRequest(t *testing.T) {
 	router.RegisterPluginEndpoint(runtimeID, providerServer.URL)
 
 	// Create request from caller plugin
-	callerID := generateRuntimeID("caller-plugin")
-	callerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = callerToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller-plugin")
+	callerToken, _ := generateToken()
+	registerTestToken(handshake, callerID, callerToken)
 
 	req := httptest.NewRequest(
 		"POST",
@@ -116,11 +125,9 @@ func TestServiceRouter_InvalidToken(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register valid caller but use wrong token
-	callerID := generateRuntimeID("caller")
-	validToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = validToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller")
+	validToken, _ := generateToken()
+	registerTestToken(handshake, callerID, validToken)
 
 	req := httptest.NewRequest("POST", "/services/logger/some-provider/Log", nil)
 	req.Header.Set("X-Plugin-Runtime-ID", callerID)
@@ -141,11 +148,9 @@ func TestServiceRouter_ProviderNotFound(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register valid caller
-	callerID := generateRuntimeID("caller")
-	token := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = token
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller")
+	token, _ := generateToken()
+	registerTestToken(handshake, callerID, token)
 
 	req := httptest.NewRequest("POST", "/services/logger/unknown-provider/Log", nil)
 	req.Header.Set("X-Plugin-Runtime-ID", callerID)
@@ -166,11 +171,9 @@ func TestServiceRouter_UnhealthyProvider(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register provider
-	providerID := generateRuntimeID("logger-plugin")
-	providerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[providerID] = providerToken
-	handshake.mu.Unlock()
+	providerID, _ := generateRuntimeID("logger-plugin")
+	providerToken, _ := generateToken()
+	registerTestToken(handshake, providerID, providerToken)
 
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 		ServiceType:  "logger",
@@ -188,11 +191,9 @@ func TestServiceRouter_UnhealthyProvider(t *testing.T) {
 	lifecycle.ReportHealth(context.Background(), healthReq)
 
 	// Register caller
-	callerID := generateRuntimeID("caller")
-	callerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = callerToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller")
+	callerToken, _ := generateToken()
+	registerTestToken(handshake, callerID, callerToken)
 
 	req := httptest.NewRequest("POST", "/services/logger/"+providerID+"/Log", nil)
 	req.Header.Set("X-Plugin-Runtime-ID", callerID)
@@ -213,11 +214,9 @@ func TestServiceRouter_DegradedProviderStillRoutes(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register provider
-	providerID := generateRuntimeID("cache-plugin")
-	providerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[providerID] = providerToken
-	handshake.mu.Unlock()
+	providerID, _ := generateRuntimeID("cache-plugin")
+	providerToken, _ := generateToken()
+	registerTestToken(handshake, providerID, providerToken)
 
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 		ServiceType:  "cache",
@@ -247,11 +246,9 @@ func TestServiceRouter_DegradedProviderStillRoutes(t *testing.T) {
 	router.RegisterPluginEndpoint(providerID, providerServer.URL)
 
 	// Register caller
-	callerID := generateRuntimeID("app")
-	callerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = callerToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("app")
+	callerToken, _ := generateToken()
+	registerTestToken(handshake, callerID, callerToken)
 
 	req := httptest.NewRequest("POST", "/services/cache/"+providerID+"/Get", nil)
 	req.Header.Set("X-Plugin-Runtime-ID", callerID)
@@ -305,11 +302,9 @@ func TestServiceRouter_ProxiesHeaders(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register provider
-	providerID := generateRuntimeID("api")
-	providerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[providerID] = providerToken
-	handshake.mu.Unlock()
+	providerID, _ := generateRuntimeID("api")
+	providerToken, _ := generateToken()
+	registerTestToken(handshake, providerID, providerToken)
 
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 		ServiceType:  "api",
@@ -338,11 +333,9 @@ func TestServiceRouter_ProxiesHeaders(t *testing.T) {
 	router.RegisterPluginEndpoint(providerID, providerServer.URL)
 
 	// Register caller
-	callerID := generateRuntimeID("caller")
-	callerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = callerToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller")
+	callerToken, _ := generateToken()
+	registerTestToken(handshake, callerID, callerToken)
 
 	req := httptest.NewRequest("POST", "/services/api/"+providerID+"/DoSomething", strings.NewReader("body"))
 	req.Header.Set("X-Plugin-Runtime-ID", callerID)
@@ -380,11 +373,9 @@ func TestServiceRouter_ProxiesBody(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register provider
-	providerID := generateRuntimeID("echo")
-	token := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[providerID] = token
-	handshake.mu.Unlock()
+	providerID, _ := generateRuntimeID("echo")
+	token, _ := generateToken()
+	registerTestToken(handshake, providerID, token)
 
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 		ServiceType:  "echo",
@@ -412,11 +403,9 @@ func TestServiceRouter_ProxiesBody(t *testing.T) {
 	router.RegisterPluginEndpoint(providerID, providerServer.URL)
 
 	// Register caller
-	callerID := generateRuntimeID("caller")
-	callerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = callerToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller")
+	callerToken, _ := generateToken()
+	registerTestToken(handshake, callerID, callerToken)
 
 	testBody := `{"test": "data", "number": 123}`
 	req := httptest.NewRequest("POST", "/services/echo/"+providerID+"/Echo", strings.NewReader(testBody))
@@ -440,11 +429,9 @@ func TestServiceRouter_ProviderEndpointNotRegistered(t *testing.T) {
 	router := NewServiceRouter(handshake, registry, lifecycle)
 
 	// Register provider in registry but NOT in router endpoints
-	providerID := generateRuntimeID("logger")
-	providerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[providerID] = providerToken
-	handshake.mu.Unlock()
+	providerID, _ := generateRuntimeID("logger")
+	providerToken, _ := generateToken()
+	registerTestToken(handshake, providerID, providerToken)
 
 	regReq := connect.NewRequest(&connectpluginv1.RegisterServiceRequest{
 		ServiceType:  "logger",
@@ -463,11 +450,9 @@ func TestServiceRouter_ProviderEndpointNotRegistered(t *testing.T) {
 	// Note: NOT calling router.RegisterPluginEndpoint()
 
 	// Register caller
-	callerID := generateRuntimeID("caller")
-	callerToken := generateToken()
-	handshake.mu.Lock()
-	handshake.tokens[callerID] = callerToken
-	handshake.mu.Unlock()
+	callerID, _ := generateRuntimeID("caller")
+	callerToken, _ := generateToken()
+	registerTestToken(handshake, callerID, callerToken)
 
 	req := httptest.NewRequest("POST", "/services/logger/"+providerID+"/Log", nil)
 	req.Header.Set("X-Plugin-Runtime-ID", callerID)

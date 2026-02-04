@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"net"
 	"time"
 
 	"connectrpc.com/connect"
@@ -45,19 +44,13 @@ func main() {
 
 		// Start plugin server
 		fx.Invoke(func(lc fx.Lifecycle, broker *connectplugin.CapabilityBroker, store *kvimpl.Store) error {
-			var listener net.Listener
 			stopCh := make(chan struct{})
 
 			lc.Append(fx.Hook{
 				OnStart: func(ctx context.Context) error {
-					var err error
-					listener, err = net.Listen("tcp", "localhost:18080")
-					if err != nil {
-						return err
-					}
-
 					go func() {
-						connectplugin.Serve(&connectplugin.ServeConfig{
+						if err := connectplugin.Serve(&connectplugin.ServeConfig{
+							Addr: "localhost:18080",
 							Plugins: connectplugin.PluginSet{
 								"kv": &kvplugin.KVServicePlugin{},
 							},
@@ -67,19 +60,18 @@ func main() {
 							HealthService:    connectplugin.NewHealthServer(),
 							CapabilityBroker: broker,
 							StopCh:           stopCh,
-						})
+						}); err != nil {
+							log.Printf("Serve error: %v", err)
+						}
 					}()
 
 					// Wait for server to be ready
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(200 * time.Millisecond)
 					log.Println("✓ Plugin server started with broker")
 					return nil
 				},
 				OnStop: func(ctx context.Context) error {
 					close(stopCh)
-					if listener != nil {
-						listener.Close()
-					}
 					return nil
 				},
 			})

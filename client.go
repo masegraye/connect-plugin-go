@@ -3,7 +3,10 @@ package connectplugin
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -115,6 +118,11 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
+	// Normalize HostURL to Endpoint (HostURL is an alias)
+	if cfg.Endpoint == "" && cfg.HostURL != "" {
+		cfg.Endpoint = cfg.HostURL
+	}
+
 	return &Client{
 		cfg: cfg,
 	}, nil
@@ -140,6 +148,11 @@ func (c *Client) Connect(ctx context.Context) error {
 		if err := c.discoverEndpoint(ctx); err != nil {
 			return fmt.Errorf("endpoint discovery failed: %w", err)
 		}
+	}
+
+	// Warn if connecting without TLS
+	if isNonTLSEndpoint(c.cfg.Endpoint) {
+		warnNonTLSEndpoint(c.cfg.Endpoint)
 	}
 
 	// Create HTTP client for Connect RPCs
@@ -417,4 +430,35 @@ func (c *Client) ensureConnected() error {
 	// Need to connect - call Connect with background context
 	// TODO: Make context configurable
 	return c.Connect(context.Background())
+}
+
+// TLS warning helpers
+
+// tlsWarningsDisabled checks if TLS warnings are disabled via environment variable.
+func tlsWarningsDisabled() bool {
+	val := strings.ToLower(os.Getenv("CONNECTPLUGIN_DISABLE_TLS_WARNING"))
+	return val == "1" || val == "true" || val == "yes"
+}
+
+// isNonTLSEndpoint checks if an endpoint uses plaintext HTTP.
+func isNonTLSEndpoint(endpoint string) bool {
+	// Unix sockets are secure (kernel-enforced isolation)
+	if strings.HasPrefix(endpoint, "unix://") {
+		return false
+	}
+	// Check for plaintext HTTP
+	return strings.HasPrefix(endpoint, "http://")
+}
+
+// warnNonTLSEndpoint logs a warning about connecting to a non-TLS endpoint.
+func warnNonTLSEndpoint(endpoint string) {
+	if tlsWarningsDisabled() {
+		return
+	}
+	log.Printf(`WARN [connectplugin]: Non-TLS plugin endpoint
+  endpoint: %s
+  impact: credentials/tokens/plugin-data transmitted in plaintext
+  risk: Man-in-the-middle attacks, credential theft
+  resolution: Use https:// endpoint or configure TLS in client
+  suppress: CONNECTPLUGIN_DISABLE_TLS_WARNING=1 (testing only)`, endpoint)
 }

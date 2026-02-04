@@ -3,11 +3,13 @@ package connectplugin
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
@@ -20,7 +22,17 @@ const (
 
 	// DefaultMagicCookieValue is the default magic cookie value.
 	DefaultMagicCookieValue = "d3f40b3c2e1a5f8b9c4d7e6a1b2c3d4e"
+
+	// DefaultRuntimeTokenTTL is the default time-to-live for runtime tokens.
+	DefaultRuntimeTokenTTL = 24 * time.Hour
 )
+
+// tokenInfo stores token metadata including expiration.
+type tokenInfo struct {
+	token     string
+	issuedAt  time.Time
+	expiresAt time.Time
+}
 
 // HandshakeServer implements the handshake protocol server.
 type HandshakeServer struct {
@@ -28,14 +40,14 @@ type HandshakeServer struct {
 
 	// Phase 2: Token storage for runtime identity
 	mu     sync.RWMutex
-	tokens map[string]string // runtime_id → token
+	tokens map[string]*tokenInfo // runtime_id → token info
 }
 
 // NewHandshakeServer creates a new handshake server for the given configuration.
 func NewHandshakeServer(cfg *ServeConfig) *HandshakeServer {
 	return &HandshakeServer{
 		cfg:    cfg,
-		tokens: make(map[string]string),
+		tokens: make(map[string]*tokenInfo),
 	}
 }
 
@@ -83,13 +95,35 @@ func (h *HandshakeServer) Handshake(
 	// Phase 2: Generate runtime identity
 	var runtimeID, runtimeToken string
 	if req.Msg.SelfId != "" {
-		// Plugin provided self_id - generate runtime identity
-		runtimeID = generateRuntimeID(req.Msg.SelfId)
-		runtimeToken = generateToken()
+		// Validate self_id
+		if err := ValidateSelfID(req.Msg.SelfId); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
 
-		// Store token for later validation
+		// Plugin provided self_id - generate runtime identity
+		var err error
+		runtimeID, err = generateRuntimeID(req.Msg.SelfId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		runtimeToken, err = generateToken()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+
+		// Store token for later validation with expiration
+		ttl := DefaultRuntimeTokenTTL
+		if h.cfg.RuntimeTokenTTL > 0 {
+			ttl = h.cfg.RuntimeTokenTTL
+		}
+
+		now := time.Now()
 		h.mu.Lock()
-		h.tokens[runtimeID] = runtimeToken
+		h.tokens[runtimeID] = &tokenInfo{
+			token:     runtimeToken,
+			issuedAt:  now,
+			expiresAt: now.Add(ttl),
+		}
 		h.mu.Unlock()
 	}
 
@@ -176,39 +210,55 @@ func HandshakeServerHandler(server *HandshakeServer) (string, http.Handler) {
 }
 
 // ValidateToken validates a runtime token for the given runtime ID.
-// Returns true if the token is valid.
+// Returns true if the token is valid and not expired.
+// Uses constant-time comparison to prevent timing attacks.
+// Expired tokens are automatically cleaned up (lazy cleanup).
 func (h *HandshakeServer) ValidateToken(runtimeID, token string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	expectedToken, ok := h.tokens[runtimeID]
+	info, ok := h.tokens[runtimeID]
 	if !ok {
 		return false
 	}
 
-	return expectedToken == token
+	// Check expiration (lazy cleanup)
+	if time.Now().After(info.expiresAt) {
+		// Token expired - remove it and return false
+		delete(h.tokens, runtimeID)
+		return false
+	}
+
+	// Use constant-time comparison to prevent timing attacks
+	if len(info.token) != len(token) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(info.token), []byte(token)) == 1
 }
 
 // generateRuntimeID generates a unique runtime ID from the plugin's self-declared ID.
 // Format: {self_id}-{random_suffix}
 // Example: "cache-plugin" → "cache-plugin-x7k2"
-func generateRuntimeID(selfID string) string {
+// Returns an error if random suffix generation fails.
+func generateRuntimeID(selfID string) (string, error) {
 	// Generate 4-character random suffix
-	suffix := generateRandomHex(4)
+	suffix, err := generateRandomHex(4)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate runtime ID: %w", err)
+	}
 
 	// Normalize self_id (lowercase, replace spaces with hyphens)
 	normalized := strings.ToLower(strings.ReplaceAll(selfID, " ", "-"))
 
-	return fmt.Sprintf("%s-%s", normalized, suffix)
+	return fmt.Sprintf("%s-%s", normalized, suffix), nil
 }
 
 // generateRandomHex generates a cryptographically secure random hex string.
-func generateRandomHex(length int) string {
+// Returns an error if crypto/rand.Read fails.
+func generateRandomHex(length int) (string, error) {
 	bytes := make([]byte, (length+1)/2)
 	if _, err := rand.Read(bytes); err != nil {
-		// Fall back to a less secure but still random method
-		// This should never happen in practice
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
 	}
-	return hex.EncodeToString(bytes)[:length]
+	return hex.EncodeToString(bytes)[:length], nil
 }

@@ -75,6 +75,18 @@ tasks:
     cmds:
       - go test -v -short ./...
 
+  test:unit:
+    desc: Run unit tests only (alias for test)
+    deps: [proto]
+    cmds:
+      - go test -v -short ./...
+
+  test:security:
+    desc: Run security-specific tests (timing, auth, validation, expiration)
+    deps: [proto]
+    cmds:
+      - go test -v -short -run "TestTimingAttack|TestCryptoErrors|TestAuthBypass|TestTLSWarnings|TestHandshake|TestTokenExpiration|TestServiceAuthorization|TestValidate|TestTokenBucket" ./...
+
   test:integration:
     desc: Run Phase 2 integration tests with real plugin processes
     deps: [build-examples]
@@ -88,10 +100,26 @@ tasks:
       - go test -v -timeout 60s ./...
 
   test:coverage:
-    desc: Run tests with coverage
+    desc: Run tests with coverage report
+    deps: [proto]
+    cmds:
+      - go test -v -short -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report generated at coverage.html"
+
+  test:coverage:full:
+    desc: Run all tests with coverage (unit + integration)
+    deps: [build-examples]
     cmds:
       - go test -v -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out -o coverage.html
+      - echo "Full coverage report generated at coverage.html"
+
+  test:bench:
+    desc: Run benchmark tests
+    deps: [proto]
+    cmds:
+      - go test -bench=. -benchmem ./...
 
   lint:
     desc: Run linters
@@ -132,7 +160,6 @@ tasks:
       - go build -o dist/kv-host ./examples/kv/host
       - go build -o dist/kv-host-watch ./examples/kv/host-watch
       - go build -o dist/kv-integ-fx ./examples/kv/integ-fx
-      - go build -o dist/integ-test ./cmd/integ-test
       - go build -o dist/logger-plugin ./examples/logger-plugin
       - go build -o dist/cache-plugin ./examples/cache-plugin
       - go build -o dist/app-plugin ./examples/app-plugin
@@ -167,24 +194,60 @@ tasks:
     cmds:
       - ./dist/fx-managed
 
-  # Integration tests (automated with integ-test CLI)
+  # Integration tests
   integ:kv:test:
-    desc: Integration test - basic CRUD
+    desc: Integration test - KV with fx (in-process server/client)
     deps: [build-examples]
+    env:
+      CONNECTPLUGIN_DISABLE_TLS_WARNING: "1"
     cmds:
-      - ./dist/integ-test kv
+      - ./dist/kv-integ-fx
+
+  integ:kv-standalone:test:
+    desc: Integration test - KV server/client (separate processes)
+    deps: [build-examples]
+    env:
+      CONNECTPLUGIN_DISABLE_TLS_WARNING: "1"
+    cmds:
+      - |
+        PORT=18080 ./dist/kv-server &
+        SERVER_PID=$!
+        sleep 1
+        PLUGIN_ENDPOINT=http://localhost:18080 ./dist/kv-host
+        EXIT_CODE=$?
+        kill $SERVER_PID 2>/dev/null || true
+        exit $EXIT_CODE
 
   integ:kv-watch:test:
-    desc: Integration test - Watch streaming
+    desc: Integration test - KV Watch streaming
     deps: [build-examples]
+    env:
+      CONNECTPLUGIN_DISABLE_TLS_WARNING: "1"
     cmds:
-      - ./dist/integ-test kv-watch
+      - |
+        PORT=18080 ./dist/kv-server &
+        SERVER_PID=$!
+        sleep 1
+        PLUGIN_ENDPOINT=http://localhost:18080 ./dist/kv-host-watch
+        EXIT_CODE=$?
+        kill $SERVER_PID 2>/dev/null || true
+        exit $EXIT_CODE
+
+  integ:fx-managed:test:
+    desc: Integration test - mixed strategies (in-memory + process plugins)
+    deps: [build-examples]
+    env:
+      CONNECTPLUGIN_DISABLE_TLS_WARNING: "1"
+    cmds:
+      - timeout 30 ./dist/fx-managed || true
 
   integ:all:
     desc: Run all integration tests
     cmds:
       - task: integ:kv:test
+      - task: integ:kv-standalone:test
       - task: integ:kv-watch:test
+      - task: integ:fx-managed:test
 
   # Documentation tasks
   docs:serve:

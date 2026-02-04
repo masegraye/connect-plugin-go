@@ -230,9 +230,15 @@ task test:all
 - Static discovery
 - Retry interceptor
 - Circuit breaker
-- Flexible auth (Token, API Key, mTLS)
+- Token-based authentication (runtime identity, capability grants)
+- Constant-time token comparison (timing attack mitigation)
+- TLS enforcement warnings
+- See [Security Guide](docs/security.md) for deployment best practices
 
 🚧 **Planned:**
+- mTLS authentication (Phase 3)
+- Token expiration and rotation
+- Rate limiting
 - Kubernetes service discovery
 - Metrics and tracing integration
 - Admin UI for platform management
