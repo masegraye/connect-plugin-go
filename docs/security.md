@@ -11,7 +11,7 @@ This guide covers the security model, deployment practices, and threat considera
 - [Threat Model](#threat-model)
 - [Security Checklist](#security-checklist)
 - [Recent Security Fixes](#recent-security-fixes)
-- [Future Enhancements](#future-enhancements)
+- [Future Enhancements](#future-enhancements-phase-3)
 
 ## Security Model
 
@@ -67,11 +67,9 @@ Connect-plugin-go operates with three primary trust boundaries:
 **What connect-plugin-go does NOT provide:**
 
 1. **TLS Enforcement**: TLS must be configured externally (warnings provided)
-2. **mTLS Support**: Mutual TLS authentication not yet implemented
-3. **Token Expiration**: Runtime tokens never expire (planned enhancement)
-4. **Rate Limiting**: No built-in protection against request flooding
-5. **Authorization Policies**: Service registration authorization is basic
-6. **Network Isolation**: Physical/network security is operator responsibility
+2. **mTLS Support**: Mutual TLS authentication not yet implemented (planned for Phase 3)
+3. **Network Isolation**: Physical/network security is operator responsibility
+4. **Audit Logging**: Security event logging is planned for Phase 3
 
 ### Magic Cookie: Validation, Not Security
 
@@ -299,7 +297,7 @@ client.ReportHealth(ctx, state, reason, unavailableDeps)
 - 256-bit cryptographic random tokens
 - Base64-URL encoding (44 characters)
 - Constant-time comparison (timing attack resistant)
-- No automatic expiration (planned enhancement)
+- Automatic expiration (default: 24 hours, configurable)
 
 **Capability Bearer Tokens:**
 
@@ -320,7 +318,135 @@ loggerClient.Log(ctx, &LogRequest{Message: "test"},
 - 256-bit cryptographic random tokens
 - Scoped to specific capability type
 - Validated on every capability access
-- No automatic expiration
+- Automatic expiration (default: 1 hour, configurable)
+
+### Understanding Capability Grants
+
+Capability grants enable secure, scoped access to host-provided services. This section explains the complete lifecycle.
+
+**Step 1: Host Registers Capability**
+
+The host platform advertises available capabilities during handshake:
+
+```go
+// Host side: Create broker with capabilities
+broker := connectplugin.NewCapabilityBroker("http://localhost:8080")
+
+// Register logger capability
+loggerCap := loggercap.NewLoggerCapability()
+broker.RegisterCapability(loggerCap)
+
+// Serve with broker
+server := connectplugin.Serve(&connectplugin.ServeConfig{
+    Plugins:          pluginSet,
+    Impls:            impls,
+    CapabilityBroker: broker,  // Capabilities advertised in handshake
+    CapabilityGrantTTL: 30 * time.Minute,  // Grants expire after 30 minutes
+})
+```
+
+**Step 2: Plugin Discovers Available Capabilities**
+
+During handshake, plugin receives list of available capabilities:
+
+```go
+// Plugin side: Connect and see available capabilities
+client.Connect(ctx)
+
+// Handshake response includes:
+// Capabilities: ["logger", "secrets", "metrics"]
+```
+
+**Step 3: Plugin Requests Capability Grant**
+
+Plugin requests access to a specific capability:
+
+```go
+// Plugin requests logger capability
+grant, err := client.RequestCapability(ctx, "logger")
+if err != nil {
+    return fmt.Errorf("failed to request capability: %w", err)
+}
+
+// Grant contains:
+// - GrantID: "grant-f3a7"
+// - Token: "Yj8s7K3mN9pQ2rT5..." (256-bit bearer token)
+// - Endpoint: "/capabilities/logger/grant-f3a7/Log"
+// - ExpiresAt: time.Now().Add(1 * time.Hour)
+```
+
+**Step 4: Plugin Uses Capability**
+
+Plugin calls capability endpoint with bearer token:
+
+```go
+// Create client for capability endpoint
+loggerClient := loggerv1connect.NewLoggerClient(
+    httpClient,
+    hostURL,  // Host base URL
+)
+
+// Make capability call with bearer token
+req := connect.NewRequest(&loggerv1.LogRequest{
+    Level:   "INFO",
+    Message: "Plugin started",
+})
+req.Header().Set("Authorization", "Bearer "+grant.Token)
+
+_, err := loggerClient.Log(ctx, req)
+```
+
+**Step 5: Host Validates Grant**
+
+Every capability call is validated:
+
+```go
+// Host broker validates:
+// 1. Grant ID exists
+// 2. Bearer token matches (constant-time comparison)
+// 3. Grant not expired (time.Now() < expiresAt)
+// 4. Capability type matches request path
+
+// If valid: forward to capability handler
+// If invalid: return 401 Unauthorized
+// If expired: cleanup grant, return 401 Unauthorized
+```
+
+**Security Properties:**
+- **Scoped Access**: Grant only allows access to one capability type
+- **Time-Limited**: Grants expire automatically (configurable TTL)
+- **Unforgeable**: 256-bit cryptographic random tokens
+- **Constant-Time Validation**: Resistant to timing attacks
+- **Automatic Cleanup**: Expired grants removed from memory
+
+**Example: Complete Capability Flow**
+
+```go
+// === Host Side ===
+broker := connectplugin.NewCapabilityBroker("http://localhost:8080")
+
+// Register logger capability
+logger := &MyLogger{}
+broker.RegisterCapability(&LoggerCapability{impl: logger})
+
+// === Plugin Side ===
+// 1. Connect (handshake advertises "logger" capability)
+client.Connect(ctx)
+
+// 2. Request grant
+grant, _ := client.RequestCapability(ctx, "logger")
+// Returns: {GrantID: "abc", Token: "xyz", Endpoint: "/capabilities/logger/abc/Log"}
+
+// 3. Use capability (grant automatically included in delegate)
+loggerDelegate := loggerv1delegate.New(
+    loggerv1connect.NewLoggerClient(httpClient, hostURL),
+)
+loggerDelegate.Log(ctx, "INFO", "Message", nil)  // Token sent automatically
+
+// 4. Grant expires after 1 hour (configurable)
+// 5. Next call fails with 401 Unauthorized
+// 6. Plugin must request new grant
+```
 
 ### Custom Authentication (Token Validation)
 
@@ -571,15 +697,23 @@ Connect-plugin-go provides protection against:
    - No silent generation of weak tokens
    - Fixed in security update (see Recent Security Fixes)
 
-4. **Service Registry Pollution** (PARTIALLY MITIGATED)
+4. **Service Registry Pollution** (MITIGATED)
    - Runtime identity required for registration
    - Token validation on all operations
-   - Limited by basic authorization (enhancement planned)
+   - Service authorization restricts which plugins can register which services
+   - Input validation prevents malformed data
+   - Rate limiting prevents registration flooding
 
-5. **Capability Grant Theft** (PARTIALLY MITIGATED)
+5. **Capability Grant Theft** (MITIGATED)
    - Capability tokens scoped to specific types
    - Constant-time token validation
-   - No expiration (enhancement planned)
+   - Automatic expiration (default: 1 hour)
+   - Rate limiting on grant requests
+
+6. **Request Flooding DoS** (MITIGATED)
+   - Token bucket rate limiting per runtime ID
+   - Configurable limits for all public endpoints
+   - Automatic cleanup of idle rate limit buckets
 
 ### Out-of-Scope Threats
 
@@ -638,7 +772,7 @@ Connect-plugin-go does NOT protect against:
 - Tokens validated on every capability access
 - Constant-time comparison prevents timing attacks
 
-**Residual Risk:** MEDIUM (tokens don't expire, planned enhancement)
+**Residual Risk:** LOW (tokens expire after 1 hour, require re-authentication)
 
 #### Scenario 3: Service Discovery Reconnaissance
 
@@ -665,7 +799,7 @@ Connect-plugin-go does NOT protect against:
 - Requires valid runtime token per registration
 - Registration tied to authenticated plugin
 
-**Residual Risk:** MEDIUM (rate limiting planned)
+**Residual Risk:** LOW (rate limiting implemented per runtime ID)
 
 ## Security Checklist
 
@@ -832,67 +966,134 @@ export CONNECTPLUGIN_DISABLE_TLS_WARNING=1  # For testing only
 
 **References:** `design-kbyz-tls-warnings.md`
 
-## Future Enhancements
+---
 
-### Phase 3: mTLS Support
+## Phase 2 Security Features (Production Readiness)
+
+### R2.2: Token Expiration (IMPLEMENTED)
+
+Runtime tokens and capability grants now automatically expire:
+
+**Configuration:**
+```go
+server := connectplugin.Serve(&connectplugin.ServeConfig{
+    Plugins: pluginSet,
+    Impls:   impls,
+
+    // Runtime identity tokens expire after 24 hours (default)
+    RuntimeTokenTTL: 24 * time.Hour,
+
+    // Capability grants expire after 1 hour (default)
+    CapabilityGrantTTL: 1 * time.Hour,
+
+    HealthService:    connectplugin.NewHealthServer(),
+    CapabilityBroker: broker,
+})
+```
+
+**Behavior:**
+- Expired tokens are rejected with `Unauthenticated` error
+- Lazy cleanup removes expired tokens from memory
+- Plugins must re-handshake when runtime token expires
+- Capability grants must be re-requested when expired
+
+**References:** `design-ehxd-token-expiration.md`
+
+### R2.1: Rate Limiting (IMPLEMENTED)
+
+Token bucket rate limiting protects against DoS attacks:
+
+**Configuration:**
+```go
+// Create rate limiter
+limiter := connectplugin.NewTokenBucketLimiter()
+defer limiter.Close()
+
+// Define rate limits
+rateLimit := connectplugin.Rate{
+    RequestsPerSecond: 100,  // 100 requests per second
+    Burst:             10,   // Allow bursts up to 10
+}
+
+server := connectplugin.Serve(&connectplugin.ServeConfig{
+    Plugins:     pluginSet,
+    Impls:       impls,
+    RateLimiter: limiter,  // Apply to handshake, registry, broker
+    // Rate limits extracted by X-Plugin-Runtime-ID header
+})
+```
+
+**Features:**
+- Per-runtime-ID rate limiting
+- Token bucket algorithm with refill
+- Automatic cleanup of idle buckets (5 minute TTL)
+- Returns `ResourceExhausted` when limit exceeded
+- HTTP and Connect RPC interceptors available
+
+**References:** `design-pjea-rate-limiting.md`
+
+### R2.3: Service Registration Authorization (IMPLEMENTED)
+
+Control which plugins can register which service types:
+
+**Configuration:**
+```go
+registry := connectplugin.NewServiceRegistry(lifecycle)
+
+// Set allowed services during handshake
+registry.SetAllowedServices("cache-plugin-x7k2", []string{"cache", "metrics"})
+registry.SetAllowedServices("logger-plugin-a3f1", []string{"logger"})
+
+// Registration will fail if plugin tries to register unauthorized service
+```
+
+**Behavior:**
+- If no restrictions set, all services allowed (default for backward compatibility)
+- If restrictions set, only whitelisted services can be registered
+- Returns `PermissionDenied` for unauthorized registration attempts
+- Authorization enforced on every RegisterService call
+
+### R2.4: Input Validation (IMPLEMENTED)
+
+Comprehensive validation of all plugin-provided data:
+
+**Validated Fields:**
+- **Metadata**: Max 100 entries, keys ≤256 bytes, values ≤4096 bytes, alphanumeric+dash/underscore only
+- **Service Types**: ≤128 bytes, no path traversal (../, /), no null bytes
+- **Self IDs**: ≤128 bytes, alphanumeric+dash/underscore only
+- **Versions**: Valid semver format, ≤64 bytes
+- **Endpoint Paths**: Must start with `/`, ≤256 bytes, no null bytes
+
+**Enforcement:**
+- All validations run during service registration
+- Returns `InvalidArgument` with specific error message
+- Prevents injection attacks and resource exhaustion
+
+## Future Enhancements (Phase 3)
+
+### mTLS Support
 
 **Goal:** Implement mutual TLS authentication for plugin-to-plugin communication.
 
-**Design:**
-- Complete mTLS server interceptor implementation
-- Certificate-based identity extraction
-- Integration with service mesh (Istio, Linkerd)
-- Certificate rotation support
-
 **Status:** Design in progress, tracked in `design-cflz-mtls-interceptor.md`
 
-### Token Expiration
+### Audit Logging
 
-**Goal:** Add time-limited tokens with automatic renewal.
+**Goal:** Log all security-relevant events for compliance and forensics.
 
-**Design:**
-- Runtime tokens expire after configurable duration (default: 1 hour)
-- Capability grants expire after shorter duration (default: 5 minutes)
-- Token refresh endpoint for renewal
-- Automatic cleanup of expired tokens
-
-**Status:** Planned for next major version
-
-### Rate Limiting
-
-**Goal:** Protect against DoS attacks via request flooding.
-
-**Design:**
-- Token bucket rate limiter per runtime identity
-- Configurable limits for registration, discovery, capability requests
-- Circuit breaker integration for failing plugins
-- Pluggable rate limiter interface
-
-**Status:** Planned for production readiness phase
-
-### Authorization Policies
-
-**Goal:** Fine-grained access control for service operations.
-
-**Design:**
-- Service registration authorization (restrict which plugins can register which services)
-- Capability request authorization (restrict which plugins can access which capabilities)
-- Audit logging for security events
-- Policy configuration via YAML or API
-
-**Status:** Design phase
+**Status:** Planned for Phase 3
 
 ### Request Signing
 
-**Goal:** Ensure request integrity and prevent replay attacks.
+**Goal:** HMAC-based request integrity and replay protection.
 
-**Design:**
-- HMAC-SHA256 signing of all RPC requests
-- Timestamp and nonce to prevent replay
-- Signature verification on server side
-- Configurable signing keys
+**Status:** Planned for Phase 3
 
-**Status:** Future consideration
+### Network Policy Integration
+
+**Goal:** Kubernetes NetworkPolicy integration for automatic isolation.
+
+**Status:** Planned for Phase 3
 
 ## Additional Resources
 
