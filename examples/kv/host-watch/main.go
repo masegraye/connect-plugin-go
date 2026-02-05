@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -16,11 +17,16 @@ import (
 func main() {
 	ctx := context.Background()
 
+	endpoint := os.Getenv("PLUGIN_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "http://localhost:8080"
+	}
+
 	log.Println("Creating plugin client...")
 
 	// Create client
 	client, err := connectplugin.NewClient(connectplugin.ClientConfig{
-		Endpoint: "http://localhost:8080",
+		Endpoint: endpoint,
 		Plugins: connectplugin.PluginSet{
 			"kv": &kvplugin.KVServicePlugin{},
 		},

@@ -49,3 +49,4 @@ examples/*/gen/
 examples/*-plugin/*-plugin
 examples/*-plugin/examples/
 site/
+.venv/

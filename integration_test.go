@@ -254,15 +254,15 @@ func TestIntegration_ModelB_ImpactAnalysis(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	host := startHostServer(t, 58080)
+	host := startHostServer(t, 50080)
 	defer host.Shutdown()
 
 	// Start logger → cache chain
-	loggerCmd := buildAndStartPlugin(t, "logger-plugin", 58081, 58080)
+	loggerCmd := buildAndStartPlugin(t, "logger-plugin", 50081, 50080)
 	defer stopPlugin(loggerCmd)
 	time.Sleep(300 * time.Millisecond)
 
-	cacheCmd := buildAndStartPlugin(t, "cache-plugin", 58082, 58080)
+	cacheCmd := buildAndStartPlugin(t, "cache-plugin", 50082, 50080)
 	defer stopPlugin(cacheCmd)
 	time.Sleep(500 * time.Millisecond)
 

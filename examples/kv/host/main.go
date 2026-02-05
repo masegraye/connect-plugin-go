@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 
 	"connectrpc.com/connect"
 	connectplugin "github.com/masegraye/connect-plugin-go"
@@ -17,11 +18,16 @@ import (
 func main() {
 	ctx := context.Background()
 
+	endpoint := os.Getenv("PLUGIN_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "http://localhost:8080"
+	}
+
 	log.Println("Creating plugin client...")
 
 	// Create client
 	client, err := connectplugin.NewClient(connectplugin.ClientConfig{
-		Endpoint: "http://localhost:8080",
+		Endpoint: endpoint,
 		Plugins: connectplugin.PluginSet{
 			"kv": &kvplugin.KVServicePlugin{},
 		},
@@ -40,7 +46,7 @@ func main() {
 	log.Println("Checking server health...")
 	healthClient := connectpluginv1connect.NewHealthServiceClient(
 		&http.Client{},
-		"http://localhost:8080",
+		endpoint,
 	)
 	healthResp, err := healthClient.Check(ctx, connect.NewRequest(&connectpluginv1.HealthCheckRequest{
 		Service: "", // Overall health

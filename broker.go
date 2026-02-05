@@ -3,15 +3,22 @@ package connectplugin
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
 	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
+)
+
+const (
+	// DefaultCapabilityGrantTTL is the default time-to-live for capability grants.
+	DefaultCapabilityGrantTTL = 1 * time.Hour
 )
 
 // CapabilityHandler is the interface for host capabilities.
@@ -32,6 +39,7 @@ type CapabilityBroker struct {
 	capabilities map[string]CapabilityHandler
 	grants       map[string]*grantInfo
 	baseURL      string
+	grantTTL     time.Duration // Time-to-live for capability grants
 }
 
 type grantInfo struct {
@@ -39,6 +47,8 @@ type grantInfo struct {
 	capabilityType string
 	token          string
 	handler        CapabilityHandler
+	issuedAt       time.Time
+	expiresAt      time.Time
 }
 
 // NewCapabilityBroker creates a new capability broker.
@@ -47,6 +57,7 @@ func NewCapabilityBroker(baseURL string) *CapabilityBroker {
 		capabilities: make(map[string]CapabilityHandler),
 		grants:       make(map[string]*grantInfo),
 		baseURL:      baseURL,
+		grantTTL:     DefaultCapabilityGrantTTL,
 	}
 }
 
@@ -93,14 +104,23 @@ func (b *CapabilityBroker) RequestCapability(
 	// TODO: Check min_version compatibility
 
 	// Generate grant
-	grantID := generateGrantID()
-	token := generateToken()
+	grantID, err := generateGrantID()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	token, err := generateToken()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 
+	now := time.Now()
 	grant := &grantInfo{
 		grantID:        grantID,
 		capabilityType: req.Msg.CapabilityType,
 		token:          token,
 		handler:        handler,
+		issuedAt:       now,
+		expiresAt:      now.Add(b.grantTTL),
 	}
 	b.grants[grantID] = grant
 
@@ -151,17 +171,29 @@ func (b *CapabilityBroker) handleCapabilityRequest(w http.ResponseWriter, r *htt
 	}
 	token := strings.TrimPrefix(auth, "Bearer ")
 
-	// Validate grant
-	b.mu.RLock()
-	grant, ok := b.grants[grantID]
-	b.mu.RUnlock()
+	// Validate grant (with expiration check and lazy cleanup)
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
+	grant, ok := b.grants[grantID]
 	if !ok {
 		http.Error(w, "invalid grant ID", http.StatusUnauthorized)
 		return
 	}
 
-	if grant.token != token {
+	// Check expiration (lazy cleanup)
+	if time.Now().After(grant.expiresAt) {
+		delete(b.grants, grantID)
+		http.Error(w, "grant expired", http.StatusUnauthorized)
+		return
+	}
+
+	// Use constant-time comparison to prevent timing attacks
+	if len(grant.token) != len(token) {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(grant.token), []byte(token)) != 1 {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
@@ -179,15 +211,21 @@ func (b *CapabilityBroker) handleCapabilityRequest(w http.ResponseWriter, r *htt
 }
 
 // generateGrantID generates a random grant ID.
-func generateGrantID() string {
+// Returns an error if crypto/rand.Read fails.
+func generateGrantID() (string, error) {
 	b := make([]byte, 16)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate grant ID: %w", err)
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }
 
 // generateToken generates a random bearer token.
-func generateToken() string {
+// Returns an error if crypto/rand.Read fails.
+func generateToken() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate secure token: %w", err)
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }

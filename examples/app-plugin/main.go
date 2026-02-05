@@ -22,8 +22,13 @@ func main() {
 		port = "8083"
 	}
 	hostURL := os.Getenv("HOST_URL")
-	if hostURL == "" {
-		hostURL = "http://localhost:8080"
+
+	// Deployment model detection:
+	// - If HOST_URL set → Unmanaged (self-register with host)
+	// - If HOST_URL empty → Managed (wait for host to call us)
+	isUnmanaged := hostURL != ""
+	if !isUnmanaged {
+		hostURL = "http://localhost:8080" // Placeholder for managed mode
 	}
 
 	// Create plugin client
@@ -48,13 +53,17 @@ func main() {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 
-	// Connect to host
 	ctx := context.Background()
-	if err := client.Connect(ctx); err != nil {
-		log.Fatalf("Failed to connect: %v", err)
-	}
 
-	log.Printf("App plugin started with runtime_id: %s", client.RuntimeID())
+	// Unmanaged: Connect to host immediately
+	if isUnmanaged {
+		if err := client.Connect(ctx); err != nil {
+			log.Fatalf("Failed to connect: %v", err)
+		}
+		log.Printf("App plugin started (Unmanaged) with runtime_id: %s", client.RuntimeID())
+	} else {
+		log.Println("App plugin started (Managed) - waiting for host")
+	}
 
 	// Start HTTP server
 	mux := http.NewServeMux()

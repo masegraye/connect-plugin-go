@@ -13,15 +13,17 @@ import (
 type LoggerPlugin struct{}
 
 func (p *LoggerPlugin) Metadata() connectplugin.PluginMetadata {
+	// Use the path with leading slash (matches what ConnectServer returns)
+	path := "/" + loggerv1connect.LoggerName + "/"
 	return connectplugin.PluginMetadata{
 		Name:    "logger",
-		Path:    loggerv1connect.LoggerName,
+		Path:    path,
 		Version: "1.0.0",
 		Provides: []connectplugin.ServiceDeclaration{
 			{
 				Type:    "logger",
 				Version: "1.0.0",
-				Path:    loggerv1connect.LoggerName,
+				Path:    path,
 			},
 		},
 	}

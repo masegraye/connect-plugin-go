@@ -47,6 +47,9 @@ type ServiceRegistry struct {
 	// roundRobinIndex tracks position for round-robin selection
 	roundRobinIndex map[string]int
 
+	// allowedServices maps runtime_id to allowed service types for authorization
+	allowedServices map[string][]string
+
 	// lifecycleServer for checking provider health
 	lifecycleServer *LifecycleServer
 
@@ -79,9 +82,18 @@ func NewServiceRegistry(lifecycle *LifecycleServer) *ServiceRegistry {
 		registrations:   make(map[string]*ServiceProvider),
 		selection:       make(map[string]SelectionStrategy),
 		roundRobinIndex: make(map[string]int),
+		allowedServices: make(map[string][]string),
 		lifecycleServer: lifecycle,
 		watchers:        make(map[string][]*serviceWatcher),
 	}
+}
+
+// SetAllowedServices sets the allowed service types for a runtime ID.
+// This should be called during handshake based on plugin's Provides metadata.
+func (r *ServiceRegistry) SetAllowedServices(runtimeID string, serviceTypes []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.allowedServices[runtimeID] = serviceTypes
 }
 
 // SetSelectionStrategy configures the selection strategy for a service type.
@@ -97,6 +109,20 @@ func (r *ServiceRegistry) RegisterService(
 	ctx context.Context,
 	req *connect.Request[connectpluginv1.RegisterServiceRequest],
 ) (*connect.Response[connectpluginv1.RegisterServiceResponse], error) {
+	// Validate inputs
+	if err := ValidateServiceType(req.Msg.ServiceType); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if err := ValidateVersion(req.Msg.Version); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if err := ValidateEndpointPath(req.Msg.EndpointPath); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if err := ValidateMetadata(req.Msg.Metadata); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	// Extract runtime_id from request headers
 	runtimeID := req.Header().Get("X-Plugin-Runtime-ID")
 	if runtimeID == "" {
@@ -109,8 +135,29 @@ func (r *ServiceRegistry) RegisterService(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Check if plugin is authorized to register this service type
+	allowedServices, hasRestrictions := r.allowedServices[runtimeID]
+	if hasRestrictions {
+		authorized := false
+		for _, allowed := range allowedServices {
+			if allowed == req.Msg.ServiceType {
+				authorized = true
+				break
+			}
+		}
+		if !authorized {
+			return nil, connect.NewError(
+				connect.CodePermissionDenied,
+				fmt.Errorf("plugin %s not authorized to register service type %s", runtimeID, req.Msg.ServiceType),
+			)
+		}
+	}
+
 	// Create service provider
-	registrationID := generateRegistrationID()
+	registrationID, err := generateRegistrationID()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 	provider := &ServiceProvider{
 		RegistrationID: registrationID,
 		RuntimeID:      runtimeID,
@@ -525,6 +572,11 @@ func ServiceRegistryHandler(server *ServiceRegistry) (string, http.Handler) {
 }
 
 // generateRegistrationID generates a unique registration ID.
-func generateRegistrationID() string {
-	return "reg-" + generateRandomHex(16)
+// Returns an error if random ID generation fails.
+func generateRegistrationID() (string, error) {
+	hex, err := generateRandomHex(16)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate registration ID: %w", err)
+	}
+	return "reg-" + hex, nil
 }

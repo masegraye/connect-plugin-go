@@ -114,6 +114,12 @@ type ServeConfig struct {
     // CapabilityHandlers are HTTP handlers for capabilities (optional)
     CapabilityHandlers map[string]http.Handler
 
+    // CapabilityBroker manages host capabilities (optional)
+    CapabilityBroker *CapabilityBroker
+
+    // HealthService manages plugin health status (optional)
+    HealthService *HealthServer
+
     // Service Registry: LifecycleService for health reporting (optional)
     LifecycleService *LifecycleServer
 
@@ -122,6 +128,35 @@ type ServeConfig struct {
 
     // Service Registry: ServiceRouter for plugin-to-plugin routing (optional)
     ServiceRouter *ServiceRouter
+
+    // === Security Configuration ===
+
+    // RuntimeTokenTTL is the time-to-live for runtime identity tokens
+    // Tokens expire and are cleaned up after this duration
+    // Default: 24 hours
+    RuntimeTokenTTL time.Duration
+
+    // CapabilityGrantTTL is the time-to-live for capability grant tokens
+    // Grants expire and are cleaned up after this duration
+    // Default: 1 hour
+    CapabilityGrantTTL time.Duration
+
+    // RateLimiter provides rate limiting for public endpoints
+    // If set, limits are applied to handshake, registration, and capability requests
+    // Limits are enforced per X-Plugin-Runtime-ID header
+    // Set to nil to disable rate limiting
+    RateLimiter *TokenBucketLimiter
+
+    // === Lifecycle Configuration ===
+
+    // GracefulShutdownTimeout is max time for graceful shutdown (default: 30s)
+    GracefulShutdownTimeout time.Duration
+
+    // Cleanup is called during shutdown before server stops
+    Cleanup func(context.Context) error
+
+    // StopCh signals server shutdown (optional)
+    StopCh <-chan struct{}
 }
 ```
 
@@ -178,6 +213,87 @@ mux.Handle("/services/", router)
 
 http.ListenAndServe(":8080", mux)
 ```
+
+**Production server with security features:**
+
+```go
+// Create rate limiter
+limiter := connectplugin.NewTokenBucketLimiter()
+defer limiter.Close()
+
+// Create capability broker
+broker := connectplugin.NewCapabilityBroker("http://localhost:8080")
+broker.RegisterCapability(loggerCapability)
+
+server := connectplugin.Serve(&connectplugin.ServeConfig{
+    Plugins: pluginSet,
+    Impls:   impls,
+    Addr:    ":8080",
+
+    // Security configuration
+    RuntimeTokenTTL:    24 * time.Hour,  // Tokens expire after 24 hours
+    CapabilityGrantTTL: 30 * time.Minute, // Grants expire after 30 minutes
+    RateLimiter:        limiter,         // Enable rate limiting
+
+    // Services
+    HealthService:    connectplugin.NewHealthServer(),
+    CapabilityBroker: broker,
+
+    // Lifecycle
+    GracefulShutdownTimeout: 30 * time.Second,
+    Cleanup: func(ctx context.Context) error {
+        // Close database connections, flush logs, etc.
+        return nil
+    },
+})
+```
+
+## Rate Limiting Configuration
+
+### TokenBucketLimiter
+
+Implements token bucket algorithm for rate limiting:
+
+```go
+limiter := connectplugin.NewTokenBucketLimiter()
+
+// Define rate limits
+rate := connectplugin.Rate{
+    RequestsPerSecond: 100,  // Sustained rate
+    Burst:             10,   // Allow bursts
+}
+
+// Check if request allowed
+allowed := limiter.Allow("runtime-id-xyz", rate)
+if !allowed {
+    // Return ResourceExhausted error
+}
+
+// Close when done (stops cleanup goroutine)
+defer limiter.Close()
+```
+
+### Rate Struct
+
+```go
+type Rate struct {
+    RequestsPerSecond float64  // Sustained requests per second
+    Burst             int      // Maximum burst size
+}
+```
+
+**Examples:**
+- `Rate{RequestsPerSecond: 10, Burst: 5}` - 10 req/sec, allow bursts of 5
+- `Rate{RequestsPerSecond: 100, Burst: 20}` - 100 req/sec, allow bursts of 20
+- `Rate{RequestsPerSecond: 0, Burst: 10}` - No refills, one-time burst of 10
+
+### Rate Limiter Behavior
+
+- **Per-Key Limiting**: Each runtime ID gets independent bucket
+- **Token Bucket**: Requests consume tokens, refilled at specified rate
+- **Burst Handling**: Bucket accumulates up to Burst tokens when idle
+- **Cleanup**: Idle buckets removed after 5 minutes
+- **Thread-Safe**: Concurrent access from multiple goroutines
 
 ## PluginMetadata
 
@@ -338,6 +454,10 @@ Summary of all defaults:
 | ClientConfig | DiscoveryServiceName | `plugin-host` |
 | ServeConfig | Addr | `:8080` |
 | ServeConfig | ProtocolVersion | 1 |
+| ServeConfig | RuntimeTokenTTL | 24 hours |
+| ServeConfig | CapabilityGrantTTL | 1 hour |
+| ServeConfig | GracefulShutdownTimeout | 30 seconds |
+| ServeConfig | RateLimiter | nil (disabled) |
 | RetryPolicy | MaxAttempts | 3 |
 | RetryPolicy | InitialBackoff | 100ms |
 | RetryPolicy | MaxBackoff | 10s |

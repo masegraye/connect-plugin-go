@@ -62,6 +62,13 @@ nav:
     - Service Registry: guides/service-registry.md
     - Interceptors: guides/interceptors.md
     - Discovery: guides/discovery.md
+    - Rate Limiting: guides/rate-limiting.md
+    - Security Best Practices: guides/security-best-practices.md
+    - Performance: guides/performance.md
+  - Security:
+    - Security Overview: security.md
+    - Best Practices: guides/security-best-practices.md
+    - Rate Limiting: guides/rate-limiting.md
   - Reference:
     - Configuration: reference/configuration.md
     - API Reference: reference/api.md

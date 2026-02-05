@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -80,6 +81,26 @@ type ServeConfig struct {
 	// Set to nil to disable capability support.
 	CapabilityBroker *CapabilityBroker
 
+	// ===== Security =====
+
+	// RuntimeTokenTTL is the time-to-live for runtime identity tokens.
+	// Tokens are automatically expired and cleaned up after this duration.
+	// Default: 24 hours (DefaultRuntimeTokenTTL)
+	// Set to 0 to use default.
+	RuntimeTokenTTL time.Duration
+
+	// CapabilityGrantTTL is the time-to-live for capability grant tokens.
+	// Grants are automatically expired and cleaned up after this duration.
+	// Default: 1 hour (DefaultCapabilityGrantTTL)
+	// Set to 0 to use default.
+	CapabilityGrantTTL time.Duration
+
+	// RateLimiter provides rate limiting for public endpoints.
+	// If set, rate limits are applied to handshake, registration, and capability requests.
+	// Set to nil to disable rate limiting (not recommended for production).
+	// Default: nil (disabled)
+	RateLimiter RateLimiter
+
 	// ===== Phase 2: Lifecycle =====
 
 	// LifecycleService manages plugin health state reporting.
@@ -153,6 +174,16 @@ func Serve(cfg *ServeConfig) error {
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return err
+	}
+
+	// Warn if server is configured without TLS
+	if !tlsWarningsDisabled() {
+		log.Printf(`WARN [connectplugin]: Plugin server starting without TLS
+  address: %s
+  impact: runtime tokens/credentials transmitted in plaintext
+  risk: Man-in-the-middle attacks, credential theft
+  resolution: Configure TLSConfig in ServeConfig (future enhancement)
+  suppress: CONNECTPLUGIN_DISABLE_TLS_WARNING=1 (testing only)`, cfg.Addr)
 	}
 
 	// Build the HTTP mux

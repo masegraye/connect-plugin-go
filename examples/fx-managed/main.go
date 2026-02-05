@@ -42,10 +42,10 @@ func main() {
 			mux.Handle(registryPath, registryHandler)
 			mux.Handle("/services/", platform.Router())
 
-			server := &http.Server{Addr: ":9080", Handler: mux}
+			server := &http.Server{Addr: ":19080", Handler: mux}
 			go server.ListenAndServe()
 			time.Sleep(200 * time.Millisecond)
-			log.Println("Host platform started on :9080")
+			log.Println("Host platform started on :19080")
 
 			lc.Append(fx.Hook{
 				OnStop: func(ctx context.Context) error {
@@ -70,7 +70,7 @@ func main() {
 					Strategy:    "in-memory",
 					Plugin:      &LoggerPlugin{},
 					ImplFactory: func() any { return loggercap.NewLoggerCapability() },
-					HostURL:     "http://localhost:9080",
+					HostURL:     "http://localhost:19080",
 					Port:        9081,
 				},
 				// Process-based KV
@@ -79,7 +79,7 @@ func main() {
 					Provides:   []string{"kv"},
 					Strategy:   "process",
 					BinaryPath: "./dist/kv-server",
-					HostURL:    "http://localhost:9080",
+					HostURL:    "http://localhost:19080",
 					Port:       9082,
 				},
 			})
