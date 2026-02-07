@@ -10,10 +10,13 @@
 
 # Built binaries
 dist/
-server
-kv-server
-kv-host
-integ-test
+/server
+/kv-server
+/kv-host
+/integ-test
+/direct-dispatch
+/fx-direct
+/fx-managed
 
 # Test binary, built with `go test -c`
 *.test

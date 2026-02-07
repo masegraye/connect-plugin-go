@@ -25,6 +25,7 @@ type PluginLauncher struct {
 type pluginInstance struct {
 	pluginName string
 	endpoint   string
+	httpClient connect.HTTPClient // Non-nil for direct dispatch (in-memory transport)
 	cleanup    func()
 	provides   []string
 }
@@ -111,6 +112,42 @@ func (l *PluginLauncher) GetService(pluginName, serviceType string) (string, err
 	return instance.endpoint, nil
 }
 
+// GetServiceClient returns a service endpoint and an HTTP client for a plugin.
+// For direct dispatch plugins, the HTTPClient uses in-memory transport (no TCP).
+// For TCP-based plugins, HTTPClient is nil and callers should use http.DefaultClient.
+//
+// Example:
+//
+//	endpoint, httpClient, _ := launcher.GetServiceClient("kv-plugin", "kv")
+//	if httpClient == nil {
+//	    httpClient = http.DefaultClient
+//	}
+//	kvClient := kvv1connect.NewKVServiceClient(httpClient, endpoint)
+func (l *PluginLauncher) GetServiceClient(pluginName, serviceType string) (string, connect.HTTPClient, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	spec, ok := l.specs[pluginName]
+	if !ok {
+		return "", nil, fmt.Errorf("plugin %q not configured in launcher", pluginName)
+	}
+
+	if !contains(spec.Provides, serviceType) {
+		return "", nil, fmt.Errorf("plugin %q doesn't provide service %q (provides: %v)",
+			pluginName, serviceType, spec.Provides)
+	}
+
+	instance, exists := l.instances[pluginName]
+	if !exists {
+		if err := l.launchPluginLocked(pluginName, spec); err != nil {
+			return "", nil, fmt.Errorf("failed to launch plugin %q: %w", pluginName, err)
+		}
+		instance = l.instances[pluginName]
+	}
+
+	return instance.endpoint, instance.httpClient, nil
+}
+
 // launchPluginLocked launches a plugin using its configured strategy.
 // Caller must hold lock.
 func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) error {
@@ -123,7 +160,7 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 
 	// Launch plugin
 	ctx := context.Background()
-	endpoint, cleanup, err := strategy.Launch(ctx, spec)
+	result, err := strategy.Launch(ctx, spec)
 	if err != nil {
 		return err
 	}
@@ -135,8 +172,9 @@ func (l *PluginLauncher) launchPluginLocked(pluginName string, spec PluginSpec) 
 	// Store instance
 	l.instances[pluginName] = &pluginInstance{
 		pluginName: pluginName,
-		endpoint:   endpoint,
-		cleanup:    cleanup,
+		endpoint:   result.Endpoint,
+		httpClient: result.HTTPClient,
+		cleanup:    result.Cleanup,
 		provides:   spec.Provides,
 	}
 

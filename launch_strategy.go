@@ -1,22 +1,36 @@
 package connectplugin
 
-import "context"
+import (
+	"context"
+
+	"connectrpc.com/connect"
+)
 
 // LaunchStrategy defines how plugins are instantiated and started.
-// Implementations include ProcessStrategy (child processes), InMemoryStrategy (goroutines),
-// and future strategies like RemoteStrategy (already-running services).
+// Implementations include ProcessStrategy (child processes) and
+// InMemoryStrategy (in-process net.Pipe transport).
 type LaunchStrategy interface {
-	// Launch starts a plugin and returns its endpoint URL.
+	// Launch starts a plugin and returns a LaunchResult.
 	// The strategy is responsible for starting the plugin server and ensuring it's ready.
-	//
-	// Returns:
-	//   - endpoint: URL where plugin is listening (e.g., "http://localhost:8081")
-	//   - cleanup: Function to stop/cleanup the plugin (called on shutdown)
-	//   - error: If launch failed
-	Launch(ctx context.Context, spec PluginSpec) (string, func(), error)
+	Launch(ctx context.Context, spec PluginSpec) (LaunchResult, error)
 
 	// Name returns the strategy name for registration (e.g., "process", "in-memory")
 	Name() string
+}
+
+// LaunchResult contains the result of launching a plugin.
+type LaunchResult struct {
+	// Endpoint is the URL where the plugin is listening (e.g., "http://localhost:8081").
+	// For InMemoryStrategy this is a placeholder like "http://in-memory.plugin-name".
+	Endpoint string
+
+	// HTTPClient is an optional in-memory HTTP client.
+	// When non-nil, callers should use this instead of creating an HTTP client from Endpoint.
+	// This is set by InMemoryStrategy (backed by memtransport) and nil for TCP-based strategies.
+	HTTPClient connect.HTTPClient
+
+	// Cleanup is called to stop/cleanup the plugin on shutdown.
+	Cleanup func()
 }
 
 // PluginSpec describes a plugin and how to launch it.
@@ -47,11 +61,12 @@ type PluginSpec struct {
 
 	// === In-Memory Strategy Fields ===
 
-	// Plugin is the plugin wrapper (e.g., &kvplugin.KVServicePlugin{})
-	// Used by InMemoryStrategy
+	// Plugin is the plugin wrapper (e.g., &kvplugin.KVServicePlugin{}).
+	// Required for InMemoryStrategy.
 	Plugin Plugin
 
-	// ImplFactory creates the plugin implementation (used by InMemoryStrategy)
+	// ImplFactory creates the plugin implementation.
+	// Required for InMemoryStrategy.
 	// Returns the handler interface (e.g., &LoggerImpl{}, &CacheImpl{})
 	ImplFactory func() any
 

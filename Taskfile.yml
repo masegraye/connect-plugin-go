@@ -155,7 +155,7 @@ tasks:
     desc: Build example binaries to dist/
     deps: [proto]
     cmds:
-      - mkdir -p dist
+      - mkdir -p dist dist/examples
       - go build -o dist/kv-server ./examples/kv/server
       - go build -o dist/kv-host ./examples/kv/host
       - go build -o dist/kv-host-watch ./examples/kv/host-watch
@@ -167,7 +167,9 @@ tasks:
       - go build -o dist/api-plugin ./examples/api-plugin
       - go build -o dist/platform-host ./examples/docker-compose/host
       - go build -o dist/url-client ./examples/url-client
-      - go build -o dist/fx-managed ./examples/fx-managed
+      - go build -o dist/examples/fx-managed ./examples/fx-managed
+      - go build -o dist/examples/direct-dispatch ./examples/direct-dispatch
+      - go build -o dist/examples/fx-direct ./examples/fx-direct
 
   # Manual example runners (for development)
   example:server:
@@ -192,7 +194,19 @@ tasks:
     desc: Run fx-managed example (unmanaged deployment with fx)
     deps: [build-examples]
     cmds:
-      - ./dist/fx-managed
+      - ./dist/examples/fx-managed
+
+  example:direct-dispatch:
+    desc: Run direct-dispatch example (in-memory ConnectRPC, zero TCP)
+    deps: [build-examples]
+    cmds:
+      - ./dist/examples/direct-dispatch
+
+  example:fx-direct:
+    desc: Run fx-direct example (fx + in-memory strategy)
+    deps: [build-examples]
+    cmds:
+      - ./dist/examples/fx-direct
 
   # Integration tests
   integ:kv:test:
@@ -239,7 +253,7 @@ tasks:
     env:
       CONNECTPLUGIN_DISABLE_TLS_WARNING: "1"
     cmds:
-      - timeout 30 ./dist/fx-managed || true
+      - timeout 30 ./dist/examples/fx-managed || true
 
   integ:all:
     desc: Run all integration tests
