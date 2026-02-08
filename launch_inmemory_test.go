@@ -7,10 +7,10 @@ import (
 
 	"connectrpc.com/connect"
 	connectplugin "github.com/masegraye/connect-plugin-go"
-	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
-	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
-	kvplugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
-	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
+	kvv1 "github.com/masegraye/connect-plugin-go/testdata/kv/gen"
+	"github.com/masegraye/connect-plugin-go/testdata/kv/gen/kvv1connect"
+	kvplugin "github.com/masegraye/connect-plugin-go/testdata/kv/gen/kvv1plugin"
+	kvimpl "github.com/masegraye/connect-plugin-go/testdata/kv/impl"
 	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
 	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 )

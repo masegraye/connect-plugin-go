@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
-	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
-	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
+	kvv1 "github.com/masegraye/connect-plugin-go/testdata/kv/gen"
+	"github.com/masegraye/connect-plugin-go/testdata/kv/gen/kvv1connect"
+	kvimpl "github.com/masegraye/connect-plugin-go/testdata/kv/impl"
 	"github.com/masegraye/connect-plugin-go/internal/memtransport"
 )
 
