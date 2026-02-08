@@ -60,18 +60,16 @@ func main() {
 			launcher := connectplugin.NewPluginLauncher(platform, registry)
 
 			launcher.RegisterStrategy(connectplugin.NewProcessStrategy())
-			launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy())
+			launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy(registry))
 
 			launcher.Configure(map[string]connectplugin.PluginSpec{
-				// In-memory logger
+				// In-memory logger (net.Pipe transport, no TCP)
 				"logger-inmemory": {
 					Name:        "logger-inmemory",
 					Provides:    []string{"logger"},
 					Strategy:    "in-memory",
 					Plugin:      &LoggerPlugin{},
 					ImplFactory: func() any { return loggercap.NewLoggerCapability() },
-					HostURL:     "http://localhost:19080",
-					Port:        9081,
 				},
 				// Process-based KV
 				"kv-server": {

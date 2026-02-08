@@ -31,9 +31,9 @@ func (s *ProcessStrategy) Name() string {
 }
 
 // Launch starts a plugin binary as a child process.
-func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, func(), error) {
+func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (LaunchResult, error) {
 	if spec.BinaryPath == "" {
-		return "", nil, fmt.Errorf("BinaryPath required for process strategy")
+		return LaunchResult{}, fmt.Errorf("BinaryPath required for process strategy")
 	}
 
 	// 1. Start plugin binary as child process
@@ -51,7 +51,7 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return "", nil, fmt.Errorf("failed to start process %s: %w", spec.BinaryPath, err)
+		return LaunchResult{}, fmt.Errorf("failed to start process %s: %w", spec.BinaryPath, err)
 	}
 
 	s.mu.Lock()
@@ -63,7 +63,7 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 	if err := waitForPluginReady(endpoint, 5*time.Second); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
-		return "", nil, fmt.Errorf("plugin %s didn't become ready: %w", spec.Name, err)
+		return LaunchResult{}, fmt.Errorf("plugin %s didn't become ready: %w", spec.Name, err)
 	}
 
 	// 3. Return endpoint and cleanup function
@@ -82,7 +82,7 @@ func (s *ProcessStrategy) Launch(ctx context.Context, spec PluginSpec) (string, 
 		delete(s.processes, spec.Name)
 	}
 
-	return endpoint, cleanup, nil
+	return LaunchResult{Endpoint: endpoint, Cleanup: cleanup}, nil
 }
 
 // waitForPluginReady polls until the plugin endpoint is ready or timeout.
