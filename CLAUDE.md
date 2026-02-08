@@ -41,7 +41,7 @@ task proto
 
 Generates code from `.proto` files in `examples/*/proto/` to `examples/*/gen/`.
 
-**Note:** Generated code is not committed to git (see `.gitignore`).
+**Note:** Core library generated code (`gen/`) is committed to git so the module works with `go get`. Example generated code (`examples/*/gen/`) is gitignored.
 
 ### Build Example Binaries
 
@@ -138,7 +138,7 @@ connect-plugin-go/
 ## Build Rules
 
 1. **Always use `task`** - Never run `go build`, `protoc`, etc. directly
-2. **Generated code** - Proto code is generated, not committed
+2. **Generated code** - Core `gen/` is committed (required for `go get`); example `gen/` is gitignored
 3. **Build outputs** - All binaries go to `dist/` (gitignored)
 4. **Clean state** - Run `task clean` before committing
 5. **Dependencies** - Run `task install-deps` once on new checkout
