@@ -164,20 +164,10 @@ func TestConnectRPC_UnaryValidationError(t *testing.T) {
 }
 
 func TestConnectRPC_ServerStreaming(t *testing.T) {
-	ln := memtransport.New()
-	store := kvimpl.NewStore()
+	client, cleanup := setupKVService(t)
+	defer cleanup()
 
-	mux := http.NewServeMux()
-	path, handler := kvv1connect.NewKVServiceHandler(store)
-	mux.Handle(path, handler)
-
-	srv := &http.Server{Handler: mux}
-	go srv.Serve(ln)
-	defer srv.Shutdown(context.Background())
-	defer ln.Close()
-
-	client := kvv1connect.NewKVServiceClient(ln.HTTPClient(), "http://mem")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	// Start watching
