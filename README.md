@@ -7,13 +7,15 @@ A production-ready plugin system for Go using [Connect RPC](https://connectrpc.c
 
 ## ⚠️ Security Notice
 
-**TLS is REQUIRED for production.** Without TLS, authentication tokens are transmitted in plaintext.
+**TLS is REQUIRED for production** when plugins communicate over the network. Without TLS, authentication tokens are transmitted in plaintext.
+
+The **in-memory strategy** (`Strategy: "in-memory"`) is exempt — plugins communicate via `net.Pipe()` within the same process with no network I/O.
 
 ```go
-// Development only
-Endpoint: "http://localhost:8080"
+// In-memory: no TLS needed (no network)
+Strategy: "in-memory"
 
-// Production
+// Process/remote: TLS required for production
 Endpoint: "https://plugin-host.example.com"
 ```
 
