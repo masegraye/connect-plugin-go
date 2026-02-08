@@ -296,13 +296,6 @@ func TestInMemoryStrategy_HTTPClientInterface(t *testing.T) {
 	}
 }
 
-func TestNewDirectStrategy_DeprecatedAlias(t *testing.T) {
-	s := connectplugin.NewDirectStrategy(nil)
-	if s.Name() != "in-memory" {
-		t.Errorf("Name() = %q, want %q", s.Name(), "in-memory")
-	}
-}
-
 func TestInMemoryStrategy_ControlHealth(t *testing.T) {
 	lifecycle := connectplugin.NewLifecycleServer()
 	registry := connectplugin.NewServiceRegistry(lifecycle)
