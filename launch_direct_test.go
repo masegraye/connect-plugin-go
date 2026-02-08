@@ -9,8 +9,10 @@ import (
 	connectplugin "github.com/masegraye/connect-plugin-go"
 	kvv1 "github.com/masegraye/connect-plugin-go/examples/kv/gen"
 	"github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1connect"
-	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
 	kvplugin "github.com/masegraye/connect-plugin-go/examples/kv/gen/kvv1plugin"
+	kvimpl "github.com/masegraye/connect-plugin-go/examples/kv/impl"
+	connectpluginv1 "github.com/masegraye/connect-plugin-go/gen/plugin/v1"
+	"github.com/masegraye/connect-plugin-go/gen/plugin/v1/connectpluginv1connect"
 )
 
 func TestInMemoryStrategy_KV_EndToEnd(t *testing.T) {
@@ -291,5 +293,117 @@ func TestInMemoryStrategy_HTTPClientInterface(t *testing.T) {
 	_, ok := result.HTTPClient.(*http.Client)
 	if !ok {
 		t.Error("HTTPClient should be *http.Client")
+	}
+}
+
+func TestNewDirectStrategy_DeprecatedAlias(t *testing.T) {
+	s := connectplugin.NewDirectStrategy(nil)
+	if s.Name() != "in-memory" {
+		t.Errorf("Name() = %q, want %q", s.Name(), "in-memory")
+	}
+}
+
+func TestInMemoryStrategy_ControlHealth(t *testing.T) {
+	lifecycle := connectplugin.NewLifecycleServer()
+	registry := connectplugin.NewServiceRegistry(lifecycle)
+	strategy := connectplugin.NewInMemoryStrategy(registry)
+
+	result, err := strategy.Launch(context.Background(), connectplugin.PluginSpec{
+		Name:        "health-test",
+		Provides:    []string{"test"},
+		Plugin:      &kvplugin.KVServicePlugin{},
+		ImplFactory: func() any { return kvimpl.NewStore() },
+	})
+	if err != nil {
+		t.Fatalf("Launch failed: %v", err)
+	}
+	defer result.Cleanup()
+
+	// Call the PluginControl.GetHealth endpoint via ConnectRPC
+	controlClient := connectpluginv1connect.NewPluginControlClient(result.HTTPClient.(*http.Client), "http://health-test")
+	resp, err := controlClient.GetHealth(context.Background(), connect.NewRequest(&connectpluginv1.GetHealthRequest{}))
+	if err != nil {
+		t.Fatalf("GetHealth failed: %v", err)
+	}
+	if resp.Msg.State != connectpluginv1.HealthState_HEALTH_STATE_HEALTHY {
+		t.Errorf("state = %v, want HEALTHY", resp.Msg.State)
+	}
+
+	// Call Shutdown
+	shutResp, err := controlClient.Shutdown(context.Background(), connect.NewRequest(&connectpluginv1.ShutdownRequest{GracePeriodSeconds: 5}))
+	if err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+	if !shutResp.Msg.Acknowledged {
+		t.Error("expected Acknowledged=true")
+	}
+}
+
+func TestGetDefaultService(t *testing.T) {
+	lifecycle := connectplugin.NewLifecycleServer()
+	registry := connectplugin.NewServiceRegistry(lifecycle)
+
+	launcher := connectplugin.NewPluginLauncher(nil, registry)
+	launcher.RegisterStrategy(connectplugin.NewInMemoryStrategy(registry))
+
+	launcher.Configure(map[string]connectplugin.PluginSpec{
+		"single": {
+			Name:        "single",
+			Provides:    []string{"kv"},
+			Strategy:    "in-memory",
+			Plugin:      &kvplugin.KVServicePlugin{},
+			ImplFactory: func() any { return kvimpl.NewStore() },
+		},
+		"multi": {
+			Name:        "multi",
+			Provides:    []string{"kv", "cache"},
+			Strategy:    "in-memory",
+			Plugin:      &kvplugin.KVServicePlugin{},
+			ImplFactory: func() any { return kvimpl.NewStore() },
+		},
+	})
+
+	// Single-service plugin: GetDefaultService should work
+	endpoint, err := launcher.GetDefaultService("single")
+	if err != nil {
+		t.Fatalf("GetDefaultService(single) failed: %v", err)
+	}
+	if endpoint == "" {
+		t.Error("expected non-empty endpoint")
+	}
+
+	// Multi-service plugin: GetDefaultService should error
+	_, err = launcher.GetDefaultService("multi")
+	if err == nil {
+		t.Error("expected error for multi-service plugin")
+	}
+
+	// Unknown plugin: should error
+	_, err = launcher.GetDefaultService("nonexistent")
+	if err == nil {
+		t.Error("expected error for unknown plugin")
+	}
+
+	launcher.Shutdown()
+}
+
+func TestLaunchPluginLocked_UnknownStrategy(t *testing.T) {
+	lifecycle := connectplugin.NewLifecycleServer()
+	registry := connectplugin.NewServiceRegistry(lifecycle)
+
+	launcher := connectplugin.NewPluginLauncher(nil, registry)
+	// Don't register any strategies
+
+	launcher.Configure(map[string]connectplugin.PluginSpec{
+		"bad": {
+			Name:     "bad",
+			Provides: []string{"x"},
+			Strategy: "nonexistent",
+		},
+	})
+
+	_, err := launcher.GetService("bad", "x")
+	if err == nil {
+		t.Error("expected error for unknown strategy")
 	}
 }
